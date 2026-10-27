@@ -1,0 +1,45 @@
+{
+  "name": "@0k/vue-split-tabs",
+  "version": "%%version%%",
+  "description": "Content-agnostic Vue 3 split tabs with persistent layout intent and keep-mounted content.",
+  "keywords": ["vue", "vue3", "tabs", "split-pane", "resizable"],
+  "author": "Valentin Lab <valentin.lab@kalysto.org>",
+  "license": "MIT",
+  "homepage": "https://github.com/0k/vue-split-tabs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0k/vue-split-tabs.git"
+  },
+  "bugs": { "url": "https://github.com/0k/vue-split-tabs/issues" },
+  "type": "module",
+  "sideEffects": ["*.css"],
+  "files": ["dist", "README.md", "LICENSE"],
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./style.css": "./dist/style.css"
+  },
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "prepack": "npm run build",
+    "test": "vitest run --bail 1",
+    "test:browser": "node test/browser.mjs",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "node scripts/build.mjs clean && vue-tsc -p tsconfig.build.json && vite build && node scripts/build.mjs css",
+    "check": "npm run test && npm run typecheck && npm run build && node test/build.mjs && node test/types.mjs && npm run test:browser"
+  },
+  "peerDependencies": { "vue": "^3.5.0" },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "@vitejs/plugin-vue": "5.2.4",
+    "@vue/test-utils": "2.4.6",
+    "jsdom": "25.0.1",
+    "playwright": "1.64.1",
+    "typescript": "5.7.3",
+    "vite": "6.4.4",
+    "vitest": "5.0.3",
+    "vue": "3.5.43",
+    "vue-tsc": "2.2.12"
+  }
+}

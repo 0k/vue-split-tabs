@@ -1,0 +1,438 @@
+#+TITLE: @0k/vue-split-tabs
+
+* Purpose
+
+=@0k/vue-split-tabs= provides content-agnostic Vue 3 tabs in one pane or two
+resizable panes. It owns persistent custom tab order, pane membership, fitting layout,
+pointer/keyboard interaction and bounded per-page layout persistence. Hosts own
+content, labels, storage keys, navigation and themes. Persistent content moves
+through Vue Teleport without remounting.
+
+* Install
+
+#+begin_src sh
+npm install @0k/vue-split-tabs
+#+end_src
+
+=vue= =^3.5= is an external peer dependency. This package is ESM-only: use
+~import~, not CommonJS ~require~. The root export provides JavaScript and types;
+~@0k/vue-split-tabs/style.css~ is the separate stylesheet export. Import it once:
+
+#+begin_src typescript
+import '@0k/vue-split-tabs/style.css';
+#+end_src
+
+Importing the JavaScript entry does not load CSS. The declaration entry has no
+CSS import, so non-bundler TypeScript consumers do not need a CSS module shim.
+
+* Usage
+
+#+begin_src vue
+<script setup lang="ts">
+import { onBeforeUnmount, ref } from 'vue';
+import {
+  createSplitTabsController, SplitTabs, SplitTabStrip,
+  SplitTabsAnchor, SplitTabsKeep,
+} from '@0k/vue-split-tabs';
+
+const tabs = ref(['editor', 'preview', 'details']);
+const page = ref('document:example');
+const active = ref('editor');
+const controller = createSplitTabsController({
+  tabs,
+  active: { get: () => active.value, set: id => { active.value = id; } },
+  entryKey: page,
+  storageKey: 'my-app.split-layouts',
+  minPaneWidth: 450,
+  minPaneHeight: 350,
+});
+// Supply translated labels from your host application.
+const labels = { rows: 'Top / bottom', cols: 'Side by side', sendToOther: 'Move to other pane' };
+// On entry with no explicit host selection, request the remembered primary tab.
+active.value = controller.restoredActive.value || active.value;
+onBeforeUnmount(() => controller.dispose());
+</script>
+
+<template>
+  <SplitTabs :controller="controller" :labels="{ divider: 'Resize panes' }">
+    <template #pane="{ pane }">
+      <SplitTabStrip :controller="controller" :pane="pane.index" :labels="labels"
+        tab-class="host-tab" icon-class="host-icon">
+        <template #tab="{ id, active }"><span :class="{ selected: active }">{{ id }}</span></template>
+      </SplitTabStrip>
+      <SplitTabsAnchor part="body" />
+      <SplitTabsAnchor part="footer" />
+    </template>
+    <template #keep>
+      <SplitTabsKeep v-for="tab in tabs" :key="tab" :tab="tab" part="body">
+        <div>{{ tab }} content supplied by the host</div>
+      </SplitTabsKeep>
+      <SplitTabsKeep tab="editor" part="footer"><footer>Editor actions</footer></SplitTabsKeep>
+    </template>
+  </SplitTabs>
+</template>
+#+end_src
+
+Give the host container a definite height. For default pane content, omit
+~#pane~ and pass ~:strip-labels="labels"~: the package renders a strip and
+body anchor. Without ~stripLabels~, default content uses a selectable plain
+strip and body anchor; there is never an unlabelled action button. ~#keep~ is instantiated once in a
+hidden holder. Keep content without a matching anchor stays mounted there.
+
+Plain strip mode needs no controller or labels:
+
+#+begin_src vue
+<SplitTabStrip :tabs="tabs" :active="active" @select="active = $event" />
+#+end_src
+
+* Behavior contract
+
+** Intent and effective layout
+
+- ~Orientation~ is ~'rows'~ (top/bottom, horizontal divider) or ~'cols'~
+  (side by side, vertical divider). ~PaneIndex~ is ~0 | 1~; ids are strings.
+- Tabs accept a ref, getter or readonly array in the host's natural order, which
+  is the default rather than a constraint on user placement. Users can reorder
+  freely; single layout and both panes display the same effective custom order.
+- Saved ~order: string[]~ contains the desired global ordering, including absent
+  ids. Empty order means natural order. To derive effective order, take present
+  ids from saved order, then insert each newly present id after its nearest
+  natural-order predecessor already placed, or at the start when none exists.
+  This derivation never writes storage. Collapse/restoration and merge preserve
+  custom order. A page's ~entryKey~ owns its remembered order.
+- Pane 0 uses the optional host ~active.get/set~ binding; without it, an
+  internal ref starts at the first tab or ~''~. An empty host value remains
+  untouched, so hosts can render nothing until their selection settles.
+- Intent is ~{ orientation, firstActive, order, second, secondActive, ratio }~. Membership keeps
+  absent ids. The current pane-1 ids are the present ids intersecting ~second~;
+  pane 0 is the complement. Neither tab changes nor resizing writes storage.
+- Splitting requires a non-null orientation, at least one present tab in each
+  pane, and enough room in that orientation. Cols needs
+  ~width >= 2*minPaneWidth + dividerSize~; rows uses height and minPaneHeight.
+  Unmeasured 0 by 0 fits neither. Otherwise there is one pane containing all
+  present tabs and the host active id. Intent survives and automatically restores.
+- If the host active id belongs to pane 1, it is active there and pane 0 uses
+  its first tab. Otherwise pane 0 passes the host id through; pane 1 uses
+  ~secondActive~ if present, else its first tab.
+- ~paneOf(id)~ reports effective membership, or null for an absent id.
+- ~canOfferSplit~ means single layout, at least two ids, and either axis fits.
+- ~firstActive~ remembers only user actions through the controller. Its empty
+  value ~''~ means none. ~restoredActive~ exposes it only when there is a saved
+  split orientation, the id is present, and it is not in saved pane-1 membership.
+  This request remains available while collapsed for size. The controller does
+  not apply it to the host or override an explicit host selection: when the
+  host has no requested tab (for example, in its URL), the host may use
+  ~controller.restoredActive.value~ before its usual default. Reloading or
+  changing ~entryKey~ re-evaluates the request without invoking ~active.set~.
+
+** Actions
+
+- Invalid ids, panes and orientations are no-ops. Split requires single layout,
+  fitting orientation and two present tabs; it replaces pane-1 membership with
+  the chosen id, selects that id in pane 1, and preserves the intent ratio.
+- ~splitAt(id, orientation, side)~ shares those guards and creates a centred
+  split, matching the half-pane drop preview. ~side: 'end'~ puts the dragged tab
+  alone in pane 1 (right/bottom). ~side: 'start'~ puts it alone in pane 0
+  (left/top), sets ~firstActive = id~, and puts other present tabs in pane 1,
+  retaining the previous active there when valid, else using the source's
+  neighbor. The action persists once. ~SplitSide~ is ~'start' | 'end'~.
+- ~place(id, pane, beforeId)~ moves a tab before another tab in the destination
+  pane, or to that pane's end for ~null~. Same-pane placement only reorders,
+  including pane 0 in single layout; it does not select. Cross-pane placement
+  follows move selection/neighbor rules. Order, membership and selection share
+  one write. Invalid ids, panes, destination references, or current-slot drops
+  are no-ops. Moving the last tab out of a source merges, keeping the resulting
+  order. Absent ids stay in saved order even after reordering present tabs.
+- Moving 0 to 1 adds membership and selects it there; if it was host-active,
+  pane 0 selects its neighbor. Moving 1 to 0 removes membership and selects it
+  through the host binding; pane-1 selection moves to a neighbor when needed.
+- A neighbor is the next remaining tab after the source in effective order,
+  otherwise the previous remaining tab, otherwise ~''~. Moving the last present
+  tab out of either pane merges and selects the moved id. Moving to the current
+  pane is selection. Moves require effective split layout.
+- Pane-0 select persists ~firstActive~ and invokes the host binding; pane-1
+  select persists ~secondActive~. Selection must belong to its effective pane.
+- Whenever split or move calls ~active.set(id)~, it records ~firstActive = id~
+  in the same intent update as the split/move, with one storage write, not two.
+  Host navigation, size and tab-list changes never learn or overwrite it.
+- Explicit merge clears orientation, membership and both remembered selections,
+  keeping ratio and custom order. A last-tab move merges while recording the moved id as
+  ~firstActive~ in that same action; without split intent ~restoredActive~ is ~''~.
+  Merge (including the required last-tab move merge) and LRU eviction are the
+  only ways saved membership is forgotten; derived collapse never clears it.
+- ~setRatioLive~ is memory-only; ~commitRatio~ persists. Ratio denotes pane 0's
+  fraction of the available axis after subtracting the divider, clamped so both
+  panes meet their minimum. Unmeasured or non-fitting axes use the default ratio
+  for display without replacing saved intent. In that state ~commitRatio~ stores
+  the requested value clamped to ~[0,1]~, not the display default. A collapse
+  aborts a live resize and discards its uncommitted override; restoring the split
+  uses the last committed intent. Non-finite input uses the default.
+
+** Storage
+
+One JSON table under ~storageKey~ contains ~entries~ ordered oldest first;
+each entry has ~key~, monotonic ~stamp~, and ~intent~. At most ~maxEntries~
+(default 50) are retained. Reading an existing current entry bumps and writes
+recency; actions changing intent and committed ratio changes bump and write.
+Before each write the controller re-reads and validates the stored table,
+replaces its current entry, and retains other controllers' entries. The next
+stamp is the maximum stored/local stamp plus one. Failed writes remain usable
+in memory and can be flushed by a later successful write.
+New untouched keys need no table entry. ~entryKey~ changes synchronously reload
+intent. Stored entries without ~firstActive~ remain valid and load it as ~''~;
+entries without ~order~ load it as ~[]~. A stored empty-string order is also
+accepted as natural and normalized to ~[]~.
+Invalid individual entries are dropped without discarding valid neighbors;
+duplicate keys retain the valid entry with the highest stamp (last occurrence
+when tied). Corrupt JSON, wrong table shape and throwing get/set never prevent
+in-memory use. The default is ~window.localStorage~, with controller-local memory fallback.
+~dispose()~ stops its watchers. Use separate storage keys for unrelated hosts.
+
+** Components and interaction
+
+- Root is a full-size, minimum-zero flex layout. Pane 0 receives the ratio of
+  available space, pane 1 the remainder. Single pane gets 100%. Panes are
+  flex columns with hidden overflow. ResizeObserver reports the root's size and
+  disconnects on unmount; environments without it can report size explicitly.
+- Divider is a focusable labelled separator with orientation and percentage
+  value. Primary mouse or touch drag is root-relative with window listeners and
+  best-effort capture. Only pointer movement along the split axis changes the
+  live ratio; press/release without movement commits nothing. After an actual
+  drag, pointer up or cancel commits once. Unmount cleans up.
+  Double-clicking the divider centres it through ~commitRatio(0.5)~, with one
+  persisted write when changing the ratio; the two preceding pointer clicks
+  do not commit. Enter on the focused divider also centres it. The controller's
+  pane-minimum clamp still applies (the middle fits whenever the split fits).
+  Arrows matching the axis step 8px, Shift 32px; Home/End reach min/max.
+- Strips hide with zero or one tab unless ~alwaysShow~; split strips always
+  show. Standalone plain strips emit selection without icons or drag. Controller
+  strips select through the controller and emit the same event. Strips inside a
+  SplitTabs root share its pointer drag context, even when the default plain
+  strip is used without labels (then reordering is available but edge split
+  previews are not offered without orientation labels).
+- Overflowing strips scroll horizontally. Items and selection buttons do not
+  shrink, and labels do not wrap over adjacent labels. Scrollbars default to
+  thin; theme variables can hide them without disabling scrolling.
+- The strip is an ordinary collection of native buttons, not an ARIA tablist.
+  Selection buttons use ~aria-pressed~ and take their accessible name from the
+  rendered host slot text (the id by default), without an ID-based label override.
+  Action buttons retain their supplied labels. Native Tab, Shift-Tab, Enter and
+  Space apply to every button; no roving tabindex/tab-panel ownership is claimed.
+- On a focused selection button, Alt+Shift+ArrowLeft or Alt+Shift+ArrowRight
+  moves that tab one slot within its pane using ~place~, preserving focus and
+  selection. At the first/last slot the corresponding shortcut is a no-op.
+- Only the tab slot (id by default) is inside each tab button. Send icons are
+  separate sibling buttons, never nested. Single layout offers one button per
+  fitting orientation on every tab: ~data-orientation="rows"~ uses ~labels.rows~
+  and stacked rectangles with a horizontal bar; ~data-orientation="cols"~ uses
+  ~labels.cols~ and side-by-side rectangles with a vertical bar. The SVG's
+  ~data-direction~ is ~rows~ or ~cols~ respectively. One click splits directly.
+  If neither fits or ~canOfferSplit~ is false, no icon button is rendered.
+- Split layout retains one move button per tab labelled ~labels.sendToOther~;
+  its arrow indicates down/up for rows and right/left for cols.
+- Icon buttons remain in the DOM, layout and keyboard tab order for every tab.
+  They are visually hidden with ~opacity: 0~ and ~pointer-events: none~ except
+  on the active item (~split-tab-strip-item--active~), hovered item, or item
+  containing focus (~:focus-within~). Revealed buttons accept pointer events.
+  This reserves their space without a layout jump and allows keyboard access.
+  Glyphs default to 18px with a stroke width of 2, centered in a clickable box
+  at least 24px square. Host CSS variables may adjust glyph/hit size and opacity.
+- Tab-title dragging uses pointer events in both single and split layouts;
+  no HTML5 drag-and-drop is used. Mouse drag starts beyond 6px movement. Touch
+  and pen first require a 350ms long press with no movement beyond 6px; an early
+  swipe cancels the pending drag and scrolls normally. Once armed, movement
+  starts the drag. While armed, a temporary non-passive ~window.touchmove~
+  listener prevents native panning; it is removed on every exit and unmount.
+  The browser fixes ~touch-action~ at touch start: changing it later or cancelling
+  ~pointermove~ is not sufficient to prevent native panning and ~pointercancel~.
+  The source item is dimmed and a
+  floating ghost clones the rendered button content,
+  including host slot markup. It follows the pointer without intercepting hits.
+- Over a strip in the same root, a shared insertion marker appears before the
+  first item whose horizontal midpoint is right of the pointer, otherwise at
+  the end. The marker is absolute within the strip, using content-relative
+  coordinates that account for scrolling and ancestor scaling/transforms.
+  Drop calls ~place~. The current slot is a no-op.
+- In single layout, body edge thirds offer only fitting orientations. Left/right
+  create cols start/end; top/bottom create rows start/end. At corners, the edge
+  with the smallest normalized distance wins. The centre third has no target.
+  A translucent labelled shade covers the proposed new half-pane, excluding the
+  divider. Drop calls ~splitAt~ and persists once. At least two tabs are needed.
+- In split layout, the other pane's body gets a full-pane shade and its strip's
+  end marker; drop calls ~place(id, otherPane, null)~. Own-pane body, a foreign
+  root, and non-fitting regions have no target; dropping there cancels.
+- Escape and pointercancel cancel; end/unmount clean all window listeners,
+  pending hold timers, markers, shades and ghost. After a mouse drag, only an
+  immediate pointer click (~event.detail > 0~) can be suppressed; the guard
+  expires after the current task, even if the browser sends no click. Keyboard
+  activation (~detail: 0~) is never suppressed. Tab buttons keep
+  ~touch-action: pan-x~; native panning
+  cancellation comes from the armed ~touchmove~ listener, not a CSS switch.
+  An ordinary tap still selects. Because tabs use ~pan-x~, a vertical swipe
+  starting on a tab does not scroll the page. Touch dragging is verified on
+  Chromium; WebKit/iOS touch dragging has not been verified.
+- Anchors register by ~pane:part~, using injected pane context, and unregister
+  on unmount. Keep uses deferred Teleport, disabling it when no anchor exists;
+  ~v-show~ displays only the active tab. Moves, collapse and restore preserve
+  component instances and local state. Removing the host's Keep unmounts it.
+- All visible/accessibility labels come from the host. The package knows no
+  domain concepts and draws no 1px borders. WebView 91 is the runtime floor.
+
+* API
+
+The root export has ~types~ and ~default~ conditions and remains an ESM module.
+Published declarations target TypeScript ~moduleResolution: "bundler"~.
+Relative TypeScript-module imports use ~.js~ extensions; the strict NodeNext
+consumer probe still rejects the four Vue ~.vue~ component declaration exports,
+so NodeNext support is not claimed. The bundler consumer probe runs in ~check~.
+
+** ~createSplitTabsController(options)~
+
+| Option | Type | Default / meaning |
+|--------+------+-------------------|
+| tabs | MaybeRefOrGetter<readonly string[]> | Required, host natural order |
+| active | { get(): string; set(id): void } | Internal first-tab ref when absent |
+| entryKey | MaybeRefOrGetter<string> | Required, per-page persistence key |
+| storageKey | string | Required, one LRU table key |
+| storage | SplitTabsStorage | localStorage or memory |
+| maxEntries | number | 50; minimum 1 |
+| minPaneWidth | number | Required, px |
+| minPaneHeight | number | Required, px |
+| dividerSize | number | 6px |
+| defaultRatio | number | 0.5 |
+
+~SplitTabsStorage~ has ~getItem~, ~setItem~ and ~removeItem~, matching Storage.
+
+| Reactive member | Value |
+|-----------------+-------|
+| isSplit | ComputedRef<boolean> |
+| orientation | ComputedRef<Orientation or null> |
+| panes | ComputedRef<readonly { index, tabs, active }[]> |
+| fits | ComputedRef<{ rows: boolean; cols: boolean }> |
+| canOfferSplit | ComputedRef<boolean> |
+| ratio | ComputedRef<number>, effective clamped ratio |
+| restoredActive | ComputedRef<string>, saved valid pane-0 request for split intent, else empty |
+| intent | Deep-readonly intent in a ComputedRef |
+
+| Method | Arguments / result |
+|--------+--------------------|
+| paneOf | (id): PaneIndex or null |
+| split | (id, orientation): void |
+| splitAt | (id, orientation, side: SplitSide): void |
+| place | (id, pane, beforeId: string or null): void |
+| moveTo | (id, pane): void |
+| moveToOther | (id): void |
+| select | (pane, id): void |
+| merge | (): void |
+| setRatioLive / commitRatio | (ratio): void |
+| setContainerSize | (width, height): void |
+| dispose | (): void |
+
+The controller also exposes readonly ~dividerSize~ for matching custom chrome.
+~SplitTabsIntent~ includes ~order: string[]~, ~firstActive: string~, ~orientation: Orientation | null~,
+~second: string[]~, ~secondActive: string~, and ~ratio: number~.
+
+** Components
+
+| Component | Props | Slots / events |
+|-----------+-------+----------------|
+| SplitTabs | controller; labels: { divider }; optional stripLabels | #pane: { pane }; #keep once |
+| SplitTabStrip, plain | tabs; active; optional alwaysShow | #tab: { id, active }; select(id) |
+| SplitTabStrip, controlled | controller; pane; labels: { rows, cols, sendToOther } | Same slot/event |
+| SplitTabsAnchor | part, within a pane | None |
+| SplitTabsKeep | tab; part, within SplitTabs | Default content, kept mounted |
+
+Strip host class hooks: ~tabClass~, ~iconClass~. The selected button state class
+is ~split-tab-strip-tab--active~; ~aria-pressed~ is the accessible selected-state
+signal. The containing selected item uses ~split-tab-strip-item--active~.
+Classes and attributes on component roots are also host hooks. Controllers are
+stable for a SplitTabs instance: re-key SplitTabs when replacing its controller.
+Pane and anchor providers are private; use the public components to access them.
+
+Drag class hooks: ~split-tab-strip--draggable~, ~split-tab-strip-item--drag-armed~,
+~split-tab-strip-item--dragging~,
+~split-tab-strip-marker~ (~data-before~ is the following id or empty at the end),
+~split-tabs-drag-ghost~, ~split-tabs-pane--drop-target~, and
+~split-tabs-drop-shade~ (~data-zone="split"~ plus ~data-orientation~ / ~data-side~
+for new splits; ~data-zone="pane"~ for an existing destination pane). The ghost is
+a body-mounted DOM clone, not a second mounted instance of host content; its
+theme variables are copied from the root at drag start.
+
+* Theming
+
+Set variables on the host/root; fallbacks remain neutral and inherit typography.
+Divider size follows the controller so fit calculation and layout stay aligned.
+
+| CSS variable | Default |
+|--------------+---------|
+| ~--split-tabs-color~ | inherit |
+| ~--split-tabs-background~ | transparent |
+| ~--split-tabs-pane-background~ | transparent |
+| ~--split-tabs-divider-size~ | controller dividerSize, 6px |
+| ~--split-tabs-divider-background~ | transparent |
+| ~--split-tabs-divider-active-background~ | currentColor |
+| ~--split-tabs-divider-hit-extra~ | 4px each side |
+| ~--split-tabs-divider-z-index~ | 1 |
+| ~--split-tabs-drop-shade-background~ | rgba(127,127,127,0.2) |
+| ~--split-tabs-drop-label-color~ | inherit |
+| ~--split-tabs-drop-z-index~ | 3 |
+| ~--split-tabs-marker-color~ | currentColor |
+| ~--split-tabs-marker-width~ | 3px |
+| ~--split-tabs-ghost-background~ | Canvas |
+| ~--split-tabs-ghost-color~ | CanvasText |
+| ~--split-tabs-ghost-opacity~ | 0.85 |
+| ~--split-tabs-ghost-shadow~ | 0 4px 12px rgba(0,0,0,0.2) |
+| ~--split-tabs-ghost-z-index~ | 10000 |
+| ~--split-tabs-keep-overflow~ | hidden |
+| ~--split-tabs-strip-gap~ | 0px |
+| ~--split-tabs-strip-padding~ | 0px |
+| ~--split-tabs-strip-background~ | transparent |
+| ~--split-tabs-strip-scrollbar~ | thin; set none to hide on supporting browsers |
+| ~--split-tabs-strip-scrollbar-size~ | 6px; set 0px to hide the WebKit scrollbar |
+| ~--split-tabs-drag-opacity~ | 0.5 |
+| ~--split-tabs-button-color~ | inherit |
+| ~--split-tabs-button-background~ | transparent |
+| ~--split-tabs-button-radius~ | 0px |
+| ~--split-tabs-button-padding~ | 0.25rem 0.5rem |
+| ~--split-tabs-tab-active-background~ | rgba(127,127,127,0.12) |
+| ~--split-tabs-button-hover-background~ | rgba(127,127,127,0.08) |
+| ~--split-tabs-icon-size~ | 18px |
+| ~--split-tabs-icon-hit-size~ | 24px minimum width and height |
+| ~--split-tabs-icon-visible-opacity~ | 1 on active, hovered or focused items |
+
+* Development
+
+Run ~npm run check~ (unit tests, strict typecheck, clean ESM/declaration build,
+emitted-artifact and consumer-type probes, then real-browser acceptance).
+~npm run build~ clears ~dist/~ first,
+then produces ~dist/index.js~, ~dist/index.d.ts~, component declarations,
+source maps and a copy of ~src/style.css~ as ~dist/style.css~.
+Unit tests use jsdom with controlled geometry and synthetic events. The separate
+~test:browser~ step uses the pinned Playwright dev dependency and managed
+Chromium, serving only the built library, Vue and the local fixture via request
+interception. It uses native CDP touch input, not dispatched PointerEvents, to
+exercise the browser's panning/cancellation path. Browser contexts are fresh,
+external requests are rejected, and the browser is always closed.
+
+Install the development dependencies and browser before running acceptance:
+
+#+begin_src sh
+npm install
+npx --no-install playwright install chromium
+npm run check
+#+end_src
+
+Chromium's OS libraries must be available. The test does not install system
+packages or use a personal browser profile. To rerun acceptance alone after a
+build, run ~npm run test:browser~. It covers held horizontal reorder and vertical
+split, quick-swipe scrolling, mouse drag/marker geometry with transforms,
+post-touch keyboard activation, first Enter after mouse reorder/cross-pane move,
+edge-split/current-slot drops, Escape/release-away and outside drops, keyboard
+reorder/focus, and cancellation cleanup.
+
+Releases use the =pkg= workflow: ~package.json~ keeps ~%%version%%~, substituted
+from the git tag, and ~README.md~ is generated from this Org source.
+
+* License
+
+MIT, see ~LICENSE~.

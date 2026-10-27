@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/dist/style.css">
+  <script type="importmap">{ "imports": { "vue": "/vue.js" } }</script>
+  <style>
+    html, body { margin: 0; }
+    #host { width: 600px; height: 400px; }
+  </style>
+</head>
+<body>
+<div id="host"></div>
+<script type="module">
+  import { createApp, h, ref } from "vue";
+  import { createSplitTabsController, SplitTabs, SplitTabsKeep } from "/dist/index.js";
+
+  const count = Number(new URLSearchParams(location.search).get("n") || 12);
+  const tabs = ref(Array.from({ length: count }, (_, i) => `tab-${String.fromCharCode(97 + i)}`));
+  const active = ref(tabs.value[0]);
+  const controller = createSplitTabsController({
+    tabs, active: { get: () => active.value, set: id => { active.value = id; } },
+    entryKey: "browser-fixture", storageKey: "browser-layouts",
+    minPaneWidth: 100, minPaneHeight: 80,
+  });
+  window.controller = controller;
+  window.pointerLog = [];
+  window.sawGhost = false;
+  new MutationObserver(records => {
+    if (records.some(record => [...record.addedNodes].some(node =>
+      node instanceof Element && node.classList.contains("split-tabs-drag-ghost")))) window.sawGhost = true;
+  }).observe(document.body, { childList: true, subtree: true });
+  for (const type of ["pointerdown", "pointerup", "pointercancel"]) {
+    window.addEventListener(type, event => window.pointerLog.push(`${type}:${event.pointerType}`), true);
+  }
+  createApp({
+    render: () => h(SplitTabs, {
+      controller, labels: { divider: "Resize" },
+      stripLabels: { rows: "Rows", cols: "Cols", sendToOther: "Move" },
+    }, {
+      keep: () => tabs.value.map(tab => h(SplitTabsKeep, { key: tab, tab, part: "body" },
+        () => h("div", { class: "content", style: "height:100%" }, `${tab} content`))),
+    }),
+  }).mount("#host");
+</script>
+</body>
+</html>

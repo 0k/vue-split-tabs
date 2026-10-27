@@ -1,0 +1,6 @@
+NAME="@0k/vue-split-tabs"
+DESCRIPTION="Content-agnostic Vue 3 split tabs with persistent layout intent and keep-mounted content."
+EMAIL="valentin.lab@kalysto.org"
+AUTHOR="Valentin LAB"
+AUTHOR_EMAIL="$AUTHOR <$EMAIL>"
+FILES="package.json package-lock.json"
