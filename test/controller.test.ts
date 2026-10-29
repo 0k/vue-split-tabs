@@ -220,7 +220,7 @@ describe("controller", () => {
     c.dispose();
     const previous = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { stamp: number }[] };
     const restored = controller({ storage: s });
-    expect(restored.intent.value).toEqual({ orientation: "rows", firstActive: "", order: [], second: ["b", "d"], secondActive: "b", ratio: 0.7 });
+    expect(restored.intent.value).toEqual({ orientation: "rows", firstActive: "a", order: [], second: ["b", "d"], secondActive: "b", ratio: 0.7 });
     const bumped = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { stamp: number }[] };
     expect(bumped.entries[0]?.stamp).toBe((previous.entries[0]?.stamp ?? 0) + 1);
     const writes = s.setItem.mock.calls.length;
@@ -436,6 +436,23 @@ describe("controller restoration", () => {
     expect(c.intent.value.firstActive).toBe("c");
     expect(c.restoredActive.value).toBe("");
     expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
+  });
+
+  it("records the displayed tab when splitting off another tab, over a stale request", () => {
+    // Host shape: no explicit selection shows restoredActive, else the first tab.
+    const explicit = ref<string | undefined>(undefined);
+    const c: ReturnType<typeof controller> = controller({ active: {
+      get: () => explicit.value ?? (c.restoredActive.value || "a"),
+      set: (id) => { explicit.value = id; },
+    } });
+    c.setContainerSize(606, 406);
+    c.select(0, "d");
+    expect(c.intent.value.firstActive).toBe("d");
+    explicit.value = undefined;
+    expect(c.panes.value[0]?.active).toBe("a");
+    c.split("c", "rows");
+    expect(c.intent.value.firstActive).toBe("a");
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
   });
 
   it("loads an omitted firstActive as empty while retaining split intent", () => {

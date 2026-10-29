@@ -318,7 +318,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
       active.set(id);
     } else {
       const nextActive = previous === id ? adjacent : null;
-      update({ ...state.value, orientation: o, ratio, firstActive: nextActive ?? state.value.firstActive, second: [id], secondActive: id });
+      update({ ...state.value, orientation: o, ratio, firstActive: nextActive ?? previous, second: [id], secondActive: id });
       if (nextActive !== null) active.set(nextActive);
     }
     liveRatio.value = null;
