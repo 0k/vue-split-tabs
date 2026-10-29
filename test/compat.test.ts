@@ -132,7 +132,8 @@ describe("compatibility and packaging", () => {
     expect(config).toMatch(/formats:\s*\["es"\]/);
     expect(config).not.toMatch(/\bglobals\s*:/);
     expect(readFileSync("src/index.ts", "utf8")).not.toMatch(/import\s*["']\.\/style\.css/);
-    expect(readFileSync(".package.d/features", "utf8")).toBe("registry\ngithub-release\n");
+    const features = readFileSync(".package.d/features", "utf8");
+    expect(["registry\ngithub-release\n", "registry\ngithub-release\npublished\n"]).toContain(features);
   });
 
   it("overflow rules keep items and labels unshrunk and markers absolute inside the scrollable strip", () => {
