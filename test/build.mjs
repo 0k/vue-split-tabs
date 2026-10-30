@@ -32,6 +32,23 @@ assert.deepEqual(controller.panes.value.map((pane) => [...pane.tabs]), [["a"], [
 controller.merge();
 assert.deepEqual([...controller.panes.value[0].tabs], ["b", "a"]);
 controller.dispose();
+const optional = esm.createSplitTabsController({
+  tabs: ["a", "b"], optional: ["b"], entryKey: "optional-smoke", storageKey: "optional-smoke",
+  minPaneWidth: 50, minPaneHeight: 50,
+});
+assert.deepEqual([...optional.panes.value[0].tabs], ["a"]);
+assert.equal(optional.isOptional("b"), true);
+optional.open("b", 1);
+assert.deepEqual([...optional.opened.value], ["b"]);
+assert.equal(optional.panes.value[0].active, "b");
+optional.close("b");
+assert.deepEqual([...optional.opened.value], []);
+assert.equal(optional.panes.value[0].active, "a");
+optional.open("b", 0);
+optional.replace("b", "a");
+assert.deepEqual([...optional.opened.value], []);
+assert.equal(optional.panes.value[0].active, "a");
+optional.dispose();
 const declarations = readFileSync(resolve("dist/controller.d.ts"), "utf8");
 assert.doesNotMatch(readFileSync(resolve("dist/index.d.ts"), "utf8"), /import\s*["'][^"']*\.css/);
 assert.equal(readFileSync(resolve("dist/style.css"), "utf8"), readFileSync(resolve("src/style.css"), "utf8"));
@@ -45,6 +62,12 @@ assert.match(declarations, /restoredActive: ComputedRef<string>/);
 assert.match(declarations, /order: string\[\]/);
 assert.match(declarations, /splitAt\(id: string, orientation: Orientation, side: SplitSide\): void/);
 assert.match(declarations, /place\(id: string, pane: PaneIndex, beforeId: string \| null\): void/);
+assert.match(declarations, /optional\?: MaybeRefOrGetter<readonly string\[\]>/);
+assert.match(declarations, /readonly opened: ComputedRef<readonly string\[\]>/);
+assert.match(declarations, /open\(id: string, pane: PaneIndex\): void/);
+assert.match(declarations, /close\(id: string\): void/);
+assert.match(declarations, /replace\(oldId: string, newId: string\): void/);
+assert.match(declarations, /isOptional\(id: string\): boolean/);
 const code = readFileSync(resolve("dist/index.js"), "utf8");
 assert.match(code, /from\s*["']vue["']/);
 for (const unsupported of [
@@ -53,4 +76,4 @@ for (const unsupported of [
 ]) {
   assert.doesNotMatch(code, unsupported);
 }
-console.log("PASS: ESM exports/order/restoration, clean output, explicit CSS, declarations, external Vue, WebView91 API scan");
+console.log("PASS: ESM exports/order/restoration/on-demand tabs, clean output, explicit CSS, declarations, external Vue, WebView91 API scan");

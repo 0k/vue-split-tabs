@@ -10,9 +10,10 @@ export interface SplitTabsContext {
 }
 export const splitTabsKey: InjectionKey<SplitTabsContext> = Symbol("split-tabs");
 export const paneKey: InjectionKey<PaneIndex> = Symbol("split-tabs-pane");
-export interface SplitTabStripLabels { rows: string; cols: string; sendToOther: string }
+export interface SplitTabStripLabels { rows: string; cols: string; sendToOther: string; close?: string }
 interface StripHooks {
   alwaysShow?: boolean;
+  splitButtons?: boolean;
   tabClass?: string;
   iconClass?: string;
 }

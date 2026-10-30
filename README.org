@@ -89,6 +89,14 @@ Plain strip mode needs no controller or labels:
 
 ** Intent and effective layout
 
+- ~optional~ accepts a ref, getter or readonly array of ids from ~tabs~ that are
+  available on demand. A present id is visible when it is non-optional or is in
+  saved ~opened~. Omit ~optional~ to keep today's behavior: every present tab is
+  visible. Layout, split eligibility, membership and restoration use visible ids.
+- ~controller.opened.value~ is the readonly list of visible optional ids currently
+  open, in effective order. ~controller.isOptional(id)~ checks the host's optional
+  list. Saved ~intent.opened~ also retains absent ids, so temporarily undetected
+  features reappear open without a storage write when detected again.
 - ~Orientation~ is ~'rows'~ (top/bottom, horizontal divider) or ~'cols'~
   (side by side, vertical divider). ~PaneIndex~ is ~0 | 1~; ids are strings.
 - Tabs accept a ref, getter or readonly array in the host's natural order, which
@@ -103,22 +111,22 @@ Plain strip mode needs no controller or labels:
 - Pane 0 uses the optional host ~active.get/set~ binding; without it, an
   internal ref starts at the first tab or ~''~. An empty host value remains
   untouched, so hosts can render nothing until their selection settles.
-- Intent is ~{ orientation, firstActive, order, second, secondActive, ratio }~. Membership keeps
-  absent ids. The current pane-1 ids are the present ids intersecting ~second~;
+- Intent is ~{ orientation, firstActive, order, opened, second, secondActive, ratio }~.
+  Membership keeps absent ids. The current pane-1 ids are the visible ids intersecting ~second~;
   pane 0 is the complement. Neither tab changes nor resizing writes storage.
-- Splitting requires a non-null orientation, at least one present tab in each
+- Splitting requires a non-null orientation, at least one visible tab in each
   pane, and enough room in that orientation. Cols needs
   ~width >= 2*minPaneWidth + dividerSize~; rows uses height and minPaneHeight.
   Unmeasured 0 by 0 fits neither. Otherwise there is one pane containing all
-  present tabs and the host active id. Intent survives and automatically restores.
+  visible tabs and the host active id (never a closed optional id). Intent survives and automatically restores.
 - If the host active id belongs to pane 1, it is active there and pane 0 uses
   its first tab. Otherwise pane 0 passes the host id through; pane 1 uses
   ~secondActive~ if present, else its first tab.
-- ~paneOf(id)~ reports effective membership, or null for an absent id.
+- ~paneOf(id)~ reports effective membership, or null for an absent or closed id.
 - ~canOfferSplit~ means single layout, at least two ids, and either axis fits.
 - ~firstActive~ remembers only user actions through the controller. Its empty
   value ~''~ means none. ~restoredActive~ exposes it only when there is a saved
-  split orientation, the id is present, and it is not in saved pane-1 membership.
+  split orientation, the id is visible, and it is not in saved pane-1 membership.
   This request remains available while collapsed for size. The controller does
   not apply it to the host or override an explicit host selection: when the
   host has no requested tab (for example, in its URL), the host may use
@@ -127,13 +135,40 @@ Plain strip mode needs no controller or labels:
 
 ** Actions
 
+- ~open(id, pane)~ ignores non-present ids. If the tab is already visible, it
+  only focuses it in its existing pane, even when another pane was requested;
+  it never moves or duplicates it. Otherwise it adds the id to ~opened~, appends
+  it to the destination's custom tab order and shows it there. The destination
+  is the requested pane while split, otherwise pane 0. Pane 0 removes lingering
+  pane-1 membership, records ~firstActive~ and calls the host active setter;
+  pane 1 records ~secondActive~. Opening is one persisted intent update.
+- ~close(id)~ only closes visible optional tabs; other ids are no-ops. It removes
+  the id from ~opened~ but keeps its custom ~order~ position. A shown tab is
+  replaced by the most recently viewed remaining tab in that pane, else its
+  order neighbour. Closing the last tab of either split pane merges, preserving
+  the other pane's shown tab, committed ratio and order, and clearing the live
+  ratio. Closing is one persisted intent update, including any replacement.
+- ~replace(oldId, newId)~ turns a visible optional placeholder into another
+  present tab in one persisted intent update. An invisible source, absent target,
+  or identical pair is a no-op. The host supplies both ids in ~tabs~ and marks
+  temporary placeholders optional so consuming them removes them from the strip.
+  If the target is hidden, it takes the source's exact custom-order slot and
+  effective pane, removing any older target position or stale membership. The
+  source's ~opened~ entry becomes the target's when optional; otherwise it is
+  removed. If the source was shown, the target is shown there (including the host
+  active setter for pane 0); otherwise the shown tab remains unchanged.
+  If the target is already visible in either pane, the source is dismissed and
+  the existing target is focused where it is, NEVER moved or duplicated. The
+  vacated pane uses its previously viewed remaining tab, else its order neighbour,
+  and an emptied split pane merges just like ~close~ (discarding any live ratio).
+  Dismissal and target focus share one write, including host selection recording.
 - Invalid ids, panes and orientations are no-ops. Split requires single layout,
-  fitting orientation and two present tabs; it replaces pane-1 membership with
+  fitting orientation and two visible tabs; it replaces pane-1 membership with
   the chosen id, selects that id in pane 1, and preserves the intent ratio.
 - ~splitAt(id, orientation, side)~ shares those guards and creates a centred
   split, matching the half-pane drop preview. ~side: 'end'~ puts the dragged tab
   alone in pane 1 (right/bottom). ~side: 'start'~ puts it alone in pane 0
-  (left/top), sets ~firstActive = id~, and puts other present tabs in pane 1,
+  (left/top), sets ~firstActive = id~, and puts other visible tabs in pane 1,
   retaining the previous active there when valid, else using the source's
   neighbor. The action persists once. ~SplitSide~ is ~'start' | 'end'~.
 - ~place(id, pane, beforeId)~ moves a tab before another tab in the destination
@@ -147,7 +182,7 @@ Plain strip mode needs no controller or labels:
   after reordering present tabs.
 - ~moveTo~ / ~moveToOther~ (the move button) put the tab away: it joins the
   destination pane behind that pane's shown tab, which stays shown, in both
-  directions. Moving the last present tab out of either pane merges and keeps
+  directions. Moving the last visible tab out of either pane merges and keeps
   showing the tab the destination pane was showing. Moving to the current pane
   is selection. Moves require effective split layout.
 - When the shown tab leaves its pane, that pane shows the tab the user viewed
@@ -161,10 +196,12 @@ Plain strip mode needs no controller or labels:
   in the same intent update as the split/move, with one storage write, not two.
   Host navigation, size and tab-list changes never learn or overwrite it.
 - Explicit merge clears orientation, membership and both remembered selections,
-  keeping ratio and custom order. A last-tab move or drop merges while recording the
+  keeping ratio, opened ids and custom order. A last-tab move or drop merges while recording the
   tab it shows as ~firstActive~ in that same action; without split intent ~restoredActive~ is ~''~.
-  Merge (including the required last-tab move merge) and LRU eviction are the
-  only ways saved membership is forgotten; derived collapse never clears it.
+  Merge (including required last-tab move/close merges) clears saved membership;
+  opening a closed tab in pane 0 removes its old pane-1 membership, and ~replace~
+  consumes source membership while transferring or focusing its target. LRU eviction
+  can forget an entry; derived collapse never clears membership or opened ids.
 - ~setRatioLive~ is memory-only; ~commitRatio~ persists. Ratio denotes pane 0's
   fraction of the available axis after subtracting the divider, clamped so both
   panes meet their minimum. Unmeasured or non-fitting axes use the default ratio
@@ -187,6 +224,7 @@ New untouched keys need no table entry. ~entryKey~ changes synchronously reload
 intent. Stored entries without ~firstActive~ remain valid and load it as ~''~;
 entries without ~order~ load it as ~[]~. A stored empty-string order is also
 accepted as natural and normalized to ~[]~.
+Entries without ~opened~ load it as ~[]~ (an empty string is also tolerated).
 Invalid individual entries are dropped without discarding valid neighbors;
 duplicate keys retain the valid entry with the highest stamp (last occurrence
 when tied). Corrupt JSON, wrong table shape and throwing get/set never prevent
@@ -227,21 +265,64 @@ in-memory use. The default is ~window.localStorage~, with controller-local memor
   moves that tab one slot within its pane using ~place~, preserving focus and
   selection. At the first/last slot the corresponding shortcut is a no-op.
 - Only the tab slot (id by default) is inside each tab button. Send icons are
-  separate sibling buttons, never nested. Single layout offers one button per
+  separate sibling buttons, never nested. By default, single layout offers one button per
   fitting orientation on every tab: ~data-orientation="rows"~ uses ~labels.rows~
   and stacked rectangles with a horizontal bar; ~data-orientation="cols"~ uses
   ~labels.cols~ and side-by-side rectangles with a vertical bar. The SVG's
   ~data-direction~ is ~rows~ or ~cols~ respectively. One click splits directly.
-  If neither fits or ~canOfferSplit~ is false, no icon button is rendered.
-- Split layout retains one move button per tab labelled ~labels.sendToOther~;
+  If neither fits or ~canOfferSplit~ is false, no split icon button is rendered.
+- By default, split layout retains one move button per tab labelled ~labels.sendToOther~;
   its arrow indicates down/up for rows and right/left for cols.
+- ~SplitTabStrip~ accepts ~splitButtons?: boolean~, default ~true~. Set
+  ~:split-buttons="false"~ to render no split/move icons in either layout. Close
+  controls, the ~#end~ slot, drag reordering, labelled edge-drop splits,
+  cross-pane drops and Alt+Shift+ArrowLeft/Right reordering remain available.
+  Drag-and-drop is then the strip's only pointer way to split or move tabs.
+  Controller mode still requires ~labels~: edge-drop shades use ~labels.rows~
+  and ~labels.cols~, independently of icon-button rendering.
+- Each item starts with a ~span.split-tab-strip-title~ containing the selection
+  button and, when enabled, its close button. Split/move icons follow this span.
+  The active background belongs to ~split-tab-strip-title--active~, so label and
+  close read as one tab; hosts may underline this span. The selection button
+  retains ~split-tab-strip-tab--active~ and ~aria-pressed~ for existing host hooks.
+- Set optional ~labels.close~ to render close immediately after the label as the
+  first icon on each optional tab, inside the title span but outside the selection
+  button. It uses ~split-tab-strip-close~ and ~iconClass~, with the supplied label
+  as both title and accessible name. The round-capped stroke-2 cross defaults to
+  a 10px glyph (~--split-tabs-close-size~), an 18px square hit box
+  (~--split-tabs-close-hit~), and a tight 2px label gap (~--split-tabs-close-gap~).
+  Its reveal behavior matches the other icons. It calls ~controller.close(id)~
+  without selecting or dragging the tab, and retains layout and keyboard access.
+- The named ~#end~ slot renders after the tabs and insertion marker, outside
+  every tab item, in ~.split-tab-strip-end~ only when supplied. This wrapper is
+  sticky at the strip's right edge while scrolling, does not shrink, and uses
+  ~--split-tabs-strip-end-background~ (default ~inherit~). Flex alignment centres
+  the host control vertically on the tab row; ~--split-tabs-strip-end-padding~
+  (default ~0~) can compensate for a host underline. It is not draggable,
+  is never a drop target, and is excluded from insertion midpoint calculations.
+  Slot presence does not change strip visibility; pass ~alwaysShow~ when an add
+  control should remain visible with zero or one tab. For example, in ~#pane~:
+
+  #+begin_src vue
+  <SplitTabStrip :controller="controller" :pane="pane.index"
+    :labels="{ ...labels, close: 'Close tab' }" always-show>
+    <template #end>
+      <button type="button" @click="controller.open('details', pane.index)">+</button>
+    </template>
+  </SplitTabStrip>
+  #+end_src
+
+  The host owns this button or menu; configure ~optional: ['details']~ on the
+  controller to make that tab available on demand. Each pane may use the same
+  menu; selecting a tab open in another pane only focuses that existing tab.
 - Icon buttons remain in the DOM, layout and keyboard tab order for every tab.
   They are visually hidden with ~opacity: 0~ and ~pointer-events: none~ except
   on the active item (~split-tab-strip-item--active~), hovered item, or item
   containing focus (~:focus-within~). Revealed buttons accept pointer events.
   This reserves their space without a layout jump and allows keyboard access.
-  Glyphs default to 18px with a stroke width of 2, centered in a clickable box
-  at least 24px square. Host CSS variables may adjust glyph/hit size and opacity.
+  Split/move glyphs default to 18px with a stroke width of 2, centered in a
+  clickable box at least 24px square; close uses the smaller sizes above.
+  Host CSS variables may adjust glyph/hit size and opacity.
 - Tab-title dragging uses pointer events in both single and split layouts;
   no HTML5 drag-and-drop is used. Mouse drag starts beyond 6px movement. Touch
   and pen first require a 350ms long press with no movement beyond 6px; an early
@@ -296,6 +377,7 @@ so NodeNext support is not claimed. The bundler consumer probe runs in ~check~.
 | Option | Type | Default / meaning |
 |--------+------+-------------------|
 | tabs | MaybeRefOrGetter<readonly string[]> | Required, host natural order |
+| optional | MaybeRefOrGetter<readonly string[]> | Omitted: all present tabs visible; listed ids hidden until opened |
 | active | { get(): string; set(id): void } | Internal first-tab ref when absent |
 | entryKey | MaybeRefOrGetter<string> | Required, per-page persistence key |
 | storageKey | string | Required, one LRU table key |
@@ -317,11 +399,16 @@ so NodeNext support is not claimed. The bundler consumer probe runs in ~check~.
 | canOfferSplit | ComputedRef<boolean> |
 | ratio | ComputedRef<number>, effective clamped ratio |
 | restoredActive | ComputedRef<string>, saved valid pane-0 request for split intent, else empty |
+| opened | ComputedRef<readonly string[]>, visible open optional ids in effective order |
 | intent | Deep-readonly intent in a ComputedRef |
 
 | Method | Arguments / result |
 |--------+--------------------|
 | paneOf | (id): PaneIndex or null |
+| isOptional | (id): boolean |
+| open | (id, pane): void; focus existing tab where it is, otherwise open at destination end |
+| close | (id): void; close a visible optional tab |
+| replace | (oldId, newId): void; replace in place, or focus an existing target without moving it |
 | split | (id, orientation): void |
 | splitAt | (id, orientation, side: SplitSide): void |
 | place | (id, pane, beforeId: string or null): void |
@@ -334,7 +421,7 @@ so NodeNext support is not claimed. The bundler consumer probe runs in ~check~.
 | dispose | (): void |
 
 The controller also exposes readonly ~dividerSize~ for matching custom chrome.
-~SplitTabsIntent~ includes ~order: string[]~, ~firstActive: string~, ~orientation: Orientation | null~,
+~SplitTabsIntent~ includes ~order: string[]~, ~opened: string[]~, ~firstActive: string~, ~orientation: Orientation | null~,
 ~second: string[]~, ~secondActive: string~, and ~ratio: number~.
 
 ** Components
@@ -342,16 +429,22 @@ The controller also exposes readonly ~dividerSize~ for matching custom chrome.
 | Component | Props | Slots / events |
 |-----------+-------+----------------|
 | SplitTabs | controller; labels: { divider }; optional stripLabels | #pane: { pane }; #keep once |
-| SplitTabStrip, plain | tabs; active; optional alwaysShow | #tab: { id, active }; select(id) |
-| SplitTabStrip, controlled | controller; pane; labels: { rows, cols, sendToOther } | Same slot/event |
+| SplitTabStrip, plain | tabs; active; optional alwaysShow | #tab: { id, active }; #end; select(id) |
+| SplitTabStrip, controlled | controller; pane; labels: { rows, cols, sendToOther, close? } | Same slots/event |
 | SplitTabsAnchor | part, within a pane | None |
 | SplitTabsKeep | tab; part, within SplitTabs | Default content, kept mounted |
 
 Strip host class hooks: ~tabClass~, ~iconClass~. The selected button state class
 is ~split-tab-strip-tab--active~; ~aria-pressed~ is the accessible selected-state
 signal. The containing selected item uses ~split-tab-strip-item--active~.
+The title span uses ~split-tab-strip-title~ / ~split-tab-strip-title--active~ to
+style the label and close button together, separately from split/move actions.
 Classes and attributes on component roots are also host hooks. Controllers are
 stable for a SplitTabs instance: re-key SplitTabs when replacing its controller.
+Both strip modes accept optional ~splitButtons~ (default ~true~); it only
+controls split/move actions in controlled mode. ~alwaysShow~ controls strip
+visibility independently. Pass ~:split-buttons="false"~ on each pane's custom
+~SplitTabStrip~ to use a drag-only split/move interface.
 Pane and anchor providers are private; use the public components to access them.
 
 Drag class hooks: ~split-tab-strip--draggable~, ~split-tab-strip-item--drag-armed~,
@@ -392,6 +485,8 @@ Divider size follows the controller so fit calculation and layout stay aligned.
 | ~--split-tabs-strip-gap~ | 0px |
 | ~--split-tabs-strip-padding~ | 0px |
 | ~--split-tabs-strip-background~ | transparent |
+| ~--split-tabs-strip-end-background~ | inherit |
+| ~--split-tabs-strip-end-padding~ | 0; optional adjustment for host underlines |
 | ~--split-tabs-strip-scrollbar~ | thin; set none to hide on supporting browsers |
 | ~--split-tabs-strip-scrollbar-size~ | 6px; set 0px to hide the WebKit scrollbar |
 | ~--split-tabs-drag-opacity~ | 0.5 |
@@ -403,6 +498,9 @@ Divider size follows the controller so fit calculation and layout stay aligned.
 | ~--split-tabs-button-hover-background~ | rgba(127,127,127,0.08) |
 | ~--split-tabs-icon-size~ | 18px |
 | ~--split-tabs-icon-hit-size~ | 24px minimum width and height |
+| ~--split-tabs-close-size~ | 10px glyph width and height |
+| ~--split-tabs-close-hit~ | 18px box width and height |
+| ~--split-tabs-close-gap~ | 2px between label and close box |
 | ~--split-tabs-icon-visible-opacity~ | 1 on active, hovered or focused items |
 
 * Development

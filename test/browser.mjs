@@ -44,6 +44,134 @@ async function touchEnd(page, cdp) {
 
 const order = page => page.evaluate(() => [...window.controller.panes.value[0].tabs]);
 const cases = [
+  ["disabled split buttons preserve labelled touch edge-split, cross-pane drop and keyboard reorder", async (page, context) => {
+    await page.evaluate(() => {
+      window.fixture.end.value = true;
+      window.fixture.splitButtons.value = false;
+    });
+    await page.waitForSelector(".split-tab-strip-end");
+    assert.equal(await page.locator(".split-tab-strip-send").count(), 0);
+    const { cdp, start } = await touchStart(context, page, 0);
+    const root = await page.locator(".split-tabs").boundingBox();
+    assert.ok(root);
+    await touchMove(page, cdp, start, { x: root.x + root.width / 2, y: root.y + root.height - 10 });
+    const shade = page.locator('.split-tabs-drop-shade[data-orientation="rows"][data-side="end"]');
+    await shade.waitFor();
+    assert.equal(await shade.textContent(), "Rows");
+    await touchEnd(page, cdp);
+    await page.waitForFunction(() => window.controller.orientation.value === "rows");
+    assert.deepEqual(await page.evaluate(() => [...window.controller.panes.value[1].tabs]), ["tab-a"]);
+    assert.equal(await page.locator(".split-tab-strip-send").count(), 0);
+    const source = await center(page.locator('[data-split-tabs-tab="tab-b"] .split-tab-strip-tab'));
+    const destination = await page.locator('[data-split-tabs-pane="1"]').boundingBox();
+    assert.ok(destination);
+    const point = { x: destination.x + destination.width / 2, y: destination.y + destination.height / 2 };
+    await page.mouse.move(source.x, source.y);
+    await page.mouse.down();
+    await page.mouse.move(point.x, point.y, { steps: 8 });
+    await page.waitForSelector('[data-split-tabs-pane="1"].split-tabs-pane--drop-target');
+    await page.mouse.up();
+    assert.equal(await page.evaluate(() => window.controller.paneOf("tab-b")), 1);
+    assert.equal(await page.evaluate(() => window.controller.panes.value[1].active), "tab-b");
+    const button = page.locator('[data-split-tabs-tab="tab-c"] .split-tab-strip-tab');
+    await button.focus();
+    await page.keyboard.press("Alt+Shift+ArrowRight");
+    assert.deepEqual((await order(page)).slice(0, 2), ["tab-d", "tab-c"]);
+    assert.equal(await button.evaluate(el => el === document.activeElement), true);
+    assert.equal(await page.locator(".split-tab-strip-send").count(), 0);
+  }],
+  ["on-demand end controls stay sticky, focus existing panes, and close without selection or drag", async page => {
+    await page.evaluate(() => {
+      window.fixture.optional.value = ["tab-l"];
+      window.fixture.end.value = true;
+    });
+    const end = page.locator(".split-tab-strip-end").first();
+    await end.waitFor();
+    assert.equal(await page.locator('[data-split-tabs-tab="tab-l"]').count(), 0);
+    assert.equal(await end.evaluate(el => getComputedStyle(el).position), "sticky");
+    assert.equal(await end.evaluate(el => el.closest("[data-split-tabs-tab]")), null);
+    const strip = page.locator(".split-tab-strip").first();
+    for (const scroll of [0, 200]) {
+      await strip.evaluate((el, value) => { el.scrollLeft = value; }, scroll);
+      const r = await strip.boundingBox();
+      const e = await end.boundingBox();
+      assert.ok(e.x >= r.x && e.x + e.width <= r.x + r.width + 1, "end control stays inside scrollport");
+      const child = await end.locator("button").boundingBox();
+      const tab = await strip.locator(".split-tab-strip-tab").first().boundingBox();
+      assert.ok(Math.abs(child.y + child.height / 2 - tab.y - tab.height / 2) <= 1, "end child is centred on the tab title row");
+    }
+    await end.locator("button").click();
+    await page.waitForSelector('[data-split-tabs-tab="tab-l"] .split-tab-strip-close');
+    assert.equal(await page.evaluate(() => window.controller.panes.value[0].active), "tab-l");
+    await page.evaluate(() => window.controller.split("tab-l", "cols"));
+    await page.waitForSelector('[data-split-tabs-pane="1"] .split-tab-strip-end');
+    assert.equal(await page.locator(".split-tab-strip-end").count(), 2);
+    await page.locator('[data-split-tabs-pane="0"] .split-tab-strip-end button').click();
+    assert.deepEqual(await page.evaluate(() => window.controller.panes.value.map(p => p.active)), ["tab-a", "tab-l"]);
+    assert.equal(await page.evaluate(() => window.controller.paneOf("tab-l")), 1);
+    const close = page.locator(".split-tab-strip-close");
+    const geometry = await close.evaluate(el => {
+      const r = el.getBoundingClientRect();
+      const s = el.querySelector("svg").getBoundingClientRect();
+      const label = el.parentElement.querySelector(".split-tab-strip-tab").getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(el.parentElement.querySelector(".split-tab-strip-tab"));
+      const text = range.getBoundingClientRect();
+      return {
+        width: r.width, height: r.height, svgWidth: s.width, svgHeight: s.height, opacity: getComputedStyle(el).opacity,
+        offset: r.y + r.height / 2 - label.y - label.height / 2,
+        gap: r.left - text.right, caps: el.querySelector("path").getAttribute("stroke-linecap"),
+      };
+    });
+    assert.ok(geometry.width > 0 && geometry.width <= 18 && geometry.height > 0 && geometry.height <= 18);
+    assert.equal(geometry.svgWidth, 10);
+    assert.equal(geometry.svgHeight, 10);
+    assert.ok(Math.abs(geometry.offset) <= 1, "close is centred on its label");
+    assert.ok(Math.abs(geometry.gap - 2) <= 1, "close is tight against its label");
+    assert.equal(geometry.caps, "round");
+    assert.equal(geometry.opacity, "1");
+    await close.click();
+    await page.waitForFunction(() => !window.controller.isSplit.value);
+    assert.deepEqual(await page.evaluate(() => [...window.controller.opened.value]), []);
+    assert.equal(await page.evaluate(() => window.controller.panes.value[0].active), "tab-a");
+    assert.equal(await page.evaluate(() => window.sawGhost), false);
+  }],
+  ["close reveal retains layout and keyboard order; end content never accepts a drag", async page => {
+    await page.evaluate(() => {
+      window.fixture.optional.value = ["tab-b"];
+      window.fixture.end.value = true;
+      window.controller.open("tab-b", 0);
+      window.controller.place("tab-b", 0, "tab-c");
+      window.controller.select(0, "tab-a");
+    });
+    const close = page.locator(".split-tab-strip-close");
+    const styles = () => close.evaluate(el => ({
+      opacity: getComputedStyle(el).opacity, pointerEvents: getComputedStyle(el).pointerEvents,
+      display: getComputedStyle(el).display, tabIndex: el.tabIndex, width: el.getBoundingClientRect().width,
+    }));
+    await page.mouse.move(850, 550);
+    const hidden = await styles();
+    assert.equal(hidden.opacity, "0");
+    assert.equal(hidden.pointerEvents, "none");
+    assert.notEqual(hidden.display, "none");
+    assert.equal(hidden.tabIndex, 0);
+    assert.equal(hidden.width, 18);
+    await page.locator('[data-split-tabs-tab="tab-b"]').hover();
+    assert.equal((await styles()).opacity, "1");
+    await page.mouse.move(850, 550);
+    await close.focus();
+    assert.equal((await styles()).opacity, "1");
+    const before = await order(page);
+    const start = await center(page.locator(".split-tab-strip-tab").first());
+    const end = await center(page.locator(".split-tab-strip-end button"));
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 8 });
+    assert.equal(await page.locator(".split-tab-strip-marker").count(), 0);
+    await page.mouse.up();
+    assert.deepEqual(await order(page), before);
+    assert.equal(await page.locator(".split-tabs-drag-ghost").count(), 0);
+  }],
   ["held horizontal touch reorders with pointerup; first keyboard activation selects", async (page, context) => {
     const before = await order(page);
     const { cdp, start } = await touchStart(context, page, 1);

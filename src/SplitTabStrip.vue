@@ -3,7 +3,7 @@ import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
 import type { Orientation } from "./controller.js";
 import { paneKey, splitTabsKey, type SplitTabStripProps } from "./context.js";
 
-const props = defineProps<SplitTabStripProps>();
+const { splitButtons = true, ...props } = defineProps<SplitTabStripProps>();
 const emit = defineEmits<{ select: [id: string] }>();
 const context = inject(splitTabsKey, undefined);
 const root = ref<HTMLElement | null>(null);
@@ -27,7 +27,7 @@ const arrows: Record<Direction, string> = {
 };
 const actions = computed<IconAction[]>(() => {
   const labels = props.labels;
-  if (labels === undefined) return [];
+  if (!splitButtons || labels === undefined) return [];
   if (split.value) {
     const direction = props.controller?.orientation.value === "rows" ? pane.value === 0 ? "down" : "up" : pane.value === 0 ? "right" : "left";
     return [{ direction, orientation: null, label: labels.sendToOther }];
@@ -78,10 +78,18 @@ onBeforeUnmount(() => context?.drag.cancelOwner(root.value));
         'split-tab-strip-item--drag-armed': context?.drag.armed.value === id,
         'split-tab-strip-item--active': active === id,
       }">
-      <button type="button" class="split-tab-strip-tab" :class="[tabClass, { 'split-tab-strip-tab--active': active === id }]"
-        :aria-pressed="active === id" @click="select(id, $event)" @pointerdown="start($event, id)" @keydown="reorder($event, id)">
-        <slot name="tab" :id="id" :active="active === id">{{ id }}</slot>
-      </button>
+      <span class="split-tab-strip-title" :class="{ 'split-tab-strip-title--active': active === id }">
+        <button type="button" class="split-tab-strip-tab" :class="[tabClass, { 'split-tab-strip-tab--active': active === id }]"
+          :aria-pressed="active === id" @click="select(id, $event)" @pointerdown="start($event, id)" @keydown="reorder($event, id)">
+          <slot name="tab" :id="id" :active="active === id">{{ id }}</slot>
+        </button>
+        <button v-if="labels?.close && controller?.isOptional(id)" type="button" class="split-tab-strip-close" :class="iconClass"
+          :aria-label="labels.close" :title="labels.close" @pointerdown.stop @click.stop="controller.close(id)">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="m6 6 12 12M6 18 18 6" stroke-linecap="round" />
+          </svg>
+        </button>
+      </span>
       <button v-for="action in actions" :key="action.direction" type="button" class="split-tab-strip-send"
         :class="iconClass" :data-orientation="action.orientation ?? undefined"
         :aria-label="action.label" :title="action.label" @click="send(id, action.orientation)">
@@ -98,5 +106,6 @@ onBeforeUnmount(() => context?.drag.cancelOwner(root.value));
     </div>
     <div v-if="marker?.marker" class="split-tab-strip-marker" aria-hidden="true" :data-before="marker.beforeId ?? ''"
       :style="{ left: `${marker.marker.left}px`, top: `${marker.marker.top}px`, height: `${marker.marker.height}px` }" />
+    <div v-if="$slots.end" class="split-tab-strip-end"><slot name="end" /></div>
   </div>
 </template>

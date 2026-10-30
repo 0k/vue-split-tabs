@@ -88,6 +88,7 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     if (host === null || source === null || typeof document.elementFromPoint !== "function") return;
     const hit = document.elementFromPoint(event.clientX, event.clientY);
     if (hit === null || hit.closest(".split-tabs") !== host) return;
+    if (hit.closest(".split-tab-strip-end") !== null) return;
     const pane = hit.closest<HTMLElement>("[data-split-tabs-pane]");
     const index = pane?.dataset.splitTabsPane;
     if (pane === null || (index !== "0" && index !== "1")) return;

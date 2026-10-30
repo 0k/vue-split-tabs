@@ -14,13 +14,18 @@
 <div id="host"></div>
 <script type="module">
   import { createApp, h, ref } from "vue";
-  import { createSplitTabsController, SplitTabs, SplitTabsKeep } from "/dist/index.js";
+  import { createSplitTabsController, SplitTabs, SplitTabStrip, SplitTabsKeep } from "/dist/index.js";
 
   const count = Number(new URLSearchParams(location.search).get("n") || 12);
   const tabs = ref(Array.from({ length: count }, (_, i) => `tab-${String.fromCharCode(97 + i)}`));
   const active = ref(tabs.value[0]);
+  const optional = ref([]);
+  const end = ref(false);
+  const splitButtons = ref(true);
+  window.fixture = { optional, end, splitButtons };
+  const labels = { rows: "Rows", cols: "Cols", sendToOther: "Move", close: "Close tab" };
   const controller = createSplitTabsController({
-    tabs, active: { get: () => active.value, set: id => { active.value = id; } },
+    tabs, optional, active: { get: () => active.value, set: id => { active.value = id; } },
     entryKey: "browser-fixture", storageKey: "browser-layouts",
     minPaneWidth: 100, minPaneHeight: 80,
   });
@@ -37,8 +42,13 @@
   createApp({
     render: () => h(SplitTabs, {
       controller, labels: { divider: "Resize" },
-      stripLabels: { rows: "Rows", cols: "Cols", sendToOther: "Move" },
+      stripLabels: labels,
     }, {
+      ...(end.value ? { pane: ({ pane }) => h(SplitTabStrip, {
+        controller, pane: pane.index, labels, alwaysShow: true, splitButtons: splitButtons.value,
+      }, {
+        end: () => h("button", { type: "button", onClick: () => controller.open("tab-l", pane.index) }, "Add tab"),
+      }) } : {}),
       keep: () => tabs.value.map(tab => h(SplitTabsKeep, { key: tab, tab, part: "body" },
         () => h("div", { class: "content", style: "height:100%" }, `${tab} content`))),
     }),

@@ -14,6 +14,11 @@ function validVersion(value: unknown): boolean {
   return new RegExp(`^${number}\\.${number}\\.${number}(?:-${pre}(?:\\.${pre})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`)
     .test(value);
 }
+function declarations(css: string, selector: string): string {
+  return [...css.matchAll(/([^{}]+)\{([^}]+)\}/g)]
+    .filter((match) => match[1]?.split(",").some((part) => part.trim() === selector))
+    .map((match) => match[2]).join("\n");
+}
 describe("compatibility and packaging", () => {
   it("Pandoc-rendered README preserves every stylesheet variable's double hyphen", (context) => {
     const docs = readFileSync("README.org", "utf8");
@@ -90,27 +95,45 @@ describe("compatibility and packaging", () => {
     expect(css).not.toMatch(/\.split-tab-strip-item--drag-armed[^{}]*\{[^}]*touch-action/);
     expect(rule(".split-tabs-anchor {")).toContain("display: contents");
     expect(rule(".split-tabs-keep-holder {")).toContain("display: none");
-    expect(rule(".split-tab-strip-send svg {")).toContain("--split-tabs-icon-size, 18px");
+    expect(declarations(css, ".split-tab-strip-send svg")).toContain("--split-tabs-icon-size, 18px");
+    expect(declarations(css, ".split-tab-strip-close svg")).toContain("--split-tabs-close-size, 10px");
     const variables = [...css.matchAll(/var\((--split-tabs-[a-z-]+)/g)].map((match) => match[1]);
     const docs = readFileSync("README.org", "utf8");
     for (const variable of variables) expect(docs).toContain(variable);
   });
 
-  it("icon reveal keeps layout and focusability while active, hover and focus items expose 24px hit boxes", () => {
+  it.each(["send", "close"])("%s icon reveal keeps layout and focusability with its distinct hit size", (action) => {
     const css = readFileSync("src/style.css", "utf8");
-    const button = css.match(/(?:^|\})\s*\.split-tab-strip-send\s*\{([^}]+)\}/)?.[1] ?? "";
+    const button = declarations(css, `.split-tab-strip-${action}`);
     expect(button).toMatch(/opacity:\s*0/);
     expect(button).toMatch(/pointer-events:\s*none/);
     expect(button).not.toMatch(/display:\s*none|visibility:\s*hidden/);
-    expect(button).toMatch(/min-width:\s*var\(--split-tabs-icon-hit-size,\s*24px\)/);
-    expect(button).toMatch(/min-height:\s*var\(--split-tabs-icon-hit-size,\s*24px\)/);
+    if (action === "send") {
+      expect(button).toMatch(/min-width:\s*var\(--split-tabs-icon-hit-size,\s*24px\)/);
+      expect(button).toMatch(/min-height:\s*var\(--split-tabs-icon-hit-size,\s*24px\)/);
+    } else {
+      expect(button).toMatch(/width:\s*var\(--split-tabs-close-hit,\s*18px\)/);
+      expect(button).toMatch(/height:\s*var\(--split-tabs-close-hit,\s*18px\)/);
+      expect(button).toMatch(/padding:\s*0/);
+      expect(button).toContain("--split-tabs-close-gap, 2px");
+      expect(button).not.toContain("--split-tabs-icon-hit-size");
+    }
     expect(button).toMatch(/align-items:\s*center/);
     expect(button).toMatch(/justify-content:\s*center/);
     for (const item of [".split-tab-strip-item--active", ".split-tab-strip-item:hover", ".split-tab-strip-item:focus-within"]) {
-      const rule = css.slice(css.indexOf(`${item} .split-tab-strip-send`)).split("}")[0] ?? "";
+      const rule = declarations(css, `${item} .split-tab-strip-${action}`);
       expect(rule).toMatch(/opacity:\s*(?:1|var\(--split-tabs-icon-visible-opacity,\s*1\))/);
       expect(rule).toMatch(/pointer-events:\s*auto/);
     }
+  });
+
+  it("groups the active title background and centres the sticky end with host padding", () => {
+    const css = readFileSync("src/style.css", "utf8");
+    expect(declarations(css, ".split-tab-strip-title--active")).toContain("--split-tabs-tab-active-background");
+    expect(declarations(css, ".split-tab-strip-tab--active")).not.toContain("--split-tabs-tab-active-background");
+    const end = declarations(css, ".split-tab-strip-end");
+    for (const rule of ["display: flex", "align-items: center", "position: sticky", "right: 0", "flex: none"]) expect(end).toContain(rule);
+    expect(end).toContain("--split-tabs-strip-end-padding, 0");
   });
 
   it("removes all obsolete menu implementation and label/class APIs", () => {

@@ -13,8 +13,20 @@ storage keys, routing, data, and themes.
   ids in saved order; collapse, restoration and merge must not reset it.
 - Persist intent, not effective layout. Size and tab-list changes never write
   storage or forget absent tab ids; collapse automatically restores when it fits.
-- Only merge (explicit or required by moving the last present tab) clears pane
-  membership. Preserve the ratio on merge. LRU eviction may forget an entry.
+- Optional tabs are visible only when opened: visible = present non-optional ids
+  union present opened ids. All layout and restoration use visible ids, not present ids.
+  `open` on an already-visible tab only focuses it in its own pane, NEVER moves it.
+  Persist `opened` per entry like `order`, retaining absent ids. Derived changes never write.
+- `replace(oldId, newId)` is one atomic action, never close + open/select writes.
+  A hidden present target takes the visible source's order slot, opened state and
+  pane membership, preserving the shown tab unless the source was shown. Remove
+  any older target position/membership. An already-visible target NEVER moves:
+  dismiss the source, use normal history/last-tab merge rules, then focus the
+  target in its own pane. Host placeholders that must disappear are optional ids.
+- Merge (explicit or required by moving/closing the last visible tab) clears pane
+  membership. Opening a closed tab in pane 0 removes its old pane-1 membership;
+  replacement removes the consumed source membership and transfers the slot as above.
+  Preserve ratio, order and opened ids on merge. LRU eviction may forget an entry.
 - Keep the host's empty active id untouched. Deep links into pane 1 display there.
 - Record `firstActive` only in controller user actions: primary selection and
   every host active setter call, in the same single intent write as the action.
@@ -29,7 +41,7 @@ storage keys, routing, data, and themes.
   destination pane's shown tab, which stays shown, in both directions and after
   a merge. Only drag-and-drop (`place`) reveals the moved tab where it is dropped.
 - When the shown tab leaves its pane (split, move, cross-pane place, start-side
-  split), the replacement is the most recently viewed tab still in that pane,
+  split, close, replacement by an already-visible target), the replacement is the most recently viewed tab still in that pane,
   falling back to the order neighbor. The view history is memory-only, one per
   pane and entry key, cleared on key change, never persisted; it is learned only inside
   controller actions (the tabs shown when acting, and each tab the controller
@@ -41,17 +53,31 @@ storage keys, routing, data, and themes.
   local/stored stamp plus one. Storage errors retain in-memory intent and pending
   writes; do not resurrect stale cached entries over newer persisted ones.
 - Storage failures never break in-memory use; validate stored JSON at the boundary.
-- Stored intent without `firstActive` or `order` loads them as empty. Drop only invalid entries;
+- Stored intent without `firstActive`, `order` or `opened` loads them as empty. Drop only invalid entries;
   duplicate keys keep the highest-stamp valid entry, not a whole-table reset.
 - Keep content never remounts on pane moves, collapse, or restore. Use Teleport
   retargeting, never conditional mounting of the persistent content.
 - Labels are always host-supplied; never introduce built-in visible strings.
-- Single-layout split controls are direct per-orientation buttons for fitting
-  axes, labelled by `rows` and `cols`. Split mode keeps the directional move
-  button labelled `sendToOther`. Do not reintroduce an orientation popup.
-- Keep icon buttons in layout and keyboard order on every tab. Reveal only on
+- By default, single-layout split controls are direct per-orientation buttons for
+  fitting axes, labelled by `rows` and `cols`; split mode shows the directional
+  move button labelled `sendToOther`. A host may disable all these buttons with
+  `SplitTabStrip`'s `splitButtons: false` (default true). Keep controller labels
+  required: labelled edge-drop shades still use rows/cols. Close, end-slot,
+  drag/drop and keyboard reordering remain available. No orientation popup.
+- Keep enabled icon buttons in layout and keyboard order on every tab. Reveal only on
   active, hovered or focus-containing items; hide with opacity/pointer-events,
-  never display:none. Default glyph/hit sizes are 18px/24px with stroke width 2.
+  never display:none. Split/move glyph/hit sizes default to 18px/24px with stroke width 2.
+- Close buttons require host `labels.close` and an optional tab. Put selection
+  then close inside `.split-tab-strip-title`, BEFORE the split/move icons, never
+  nesting buttons. Close defaults to a 10px glyph in an 18px hit box, stroke 2
+  with round caps, 2px from the label; use the close-specific size/hit/gap variables.
+  Keep the same reveal rules; close never selects or drags. The active background
+  belongs to `.split-tab-strip-title--active`; keep the selection button's active
+  class and aria-pressed too. Hosts can underline the combined title span.
+- The strip `end` slot is sticky at the right edge, non-draggable, never a drop
+  target and never an item for insertion midpoint/marker calculations. Centre its
+  child vertically with flex alignment; expose optional end padding for host underlines.
+  No wrapper without a slot.
 - Do not add domain navigation, routing, fetching, or application themes.
 - Pointer gestures use window listeners and clean up on up, cancel, and unmount.
   Tab dragging works in single and split layouts and cannot target another

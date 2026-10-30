@@ -3,6 +3,408 @@ import { ref } from "vue";
 import { createSplitTabsController, type Orientation, type PaneIndex } from "../src/index";
 import { controller, storage } from "./helpers";
 
+// Acceptance ledger: on-demand visibility/counting, atomic placement/focus/close,
+// pane history and last-tab merges, per-entry persistence/legacy loading,
+// absent-id retention, reactive inputs without writes, and readonly exposure.
+describe("on-demand tabs", () => {
+  it("keeps every present tab visible when optional is omitted", () => {
+    const c = controller();
+    expect(c.panes.value[0]?.tabs).toEqual(["a", "b", "c", "d"]);
+    expect(c.opened.value).toEqual([]);
+    expect(c.isOptional("b")).toBe(false);
+    c.close("b");
+    expect(c.panes.value[0]?.tabs).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("hides optional tabs from membership, split eligibility and restored selection", () => {
+    const s = storage();
+    s.values.set("layouts", JSON.stringify({ entries: [{ key: "page", stamp: 1, intent: {
+      orientation: "cols", firstActive: "b", order: [], second: ["c"], secondActive: "c", ratio: 0.5,
+    } }] }));
+    const c = controller({ storage: s, optional: ["b", "c", "d"] });
+    c.setContainerSize(606, 406);
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a"], active: "a" }]);
+    expect(c.paneOf("b")).toBeNull();
+    expect(c.canOfferSplit.value).toBe(false);
+    expect(c.restoredActive.value).toBe("");
+    const writes = s.setItem.mock.calls.length;
+    c.split("b", "cols");
+    expect(c.isSplit.value).toBe(false);
+    expect(s.setItem).toHaveBeenCalledTimes(writes);
+  });
+
+  it.each([0, 1] as const)("opens into unsplit pane %i at the end and shows it in one write", (pane) => {
+    const s = storage();
+    const value = ref("a");
+    const set = vi.fn((id: string) => { value.value = id; });
+    const c = controller({ optional: ["b"], storage: s, active: { get: () => value.value, set } });
+    c.place("d", 0, "a");
+    const writes = s.setItem.mock.calls.length;
+    c.open("b", pane);
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["d", "a", "c", "b"], active: "b" }]);
+    expect(c.intent.value.opened).toEqual(["b"]);
+    expect(c.intent.value.firstActive).toBe("b");
+    expect(c.opened.value).toEqual(["b"]);
+    expect(set).toHaveBeenCalledExactlyOnceWith("b");
+    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
+    c.close("b");
+    expect(c.panes.value[0]?.active).toBe("a");
+  });
+
+  it("opens at the end of pane 1 and focuses an existing tab there without moving it", () => {
+    const s = storage();
+    const c = controller({ optional: ["c", "d"], storage: s });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    c.open("c", 1);
+    c.open("d", 1);
+    expect(c.panes.value).toEqual([
+      { index: 0, tabs: ["a"], active: "a" }, { index: 1, tabs: ["b", "c", "d"], active: "d" },
+    ]);
+    const membership = [...c.intent.value.second];
+    const writes = s.setItem.mock.calls.length;
+    c.open("c", 0);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
+    expect(c.intent.value.second).toEqual(membership);
+    expect(c.paneOf("c")).toBe(1);
+    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
+    c.open("a", 1);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
+    expect(c.intent.value.second).toEqual(membership);
+  });
+
+  it("clears lingering pane-1 membership when opening into pane 0", () => {
+    const c = controller({ optional: ["c"] });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    c.open("c", 1);
+    c.close("c");
+    c.open("c", 0);
+    expect(c.panes.value).toEqual([
+      { index: 0, tabs: ["a", "d", "c"], active: "c" }, { index: 1, tabs: ["b"], active: "b" },
+    ]);
+    expect(c.intent.value.second).not.toContain("c");
+  });
+
+  it("ignores non-present opens and non-optional, absent or already-closed closes", () => {
+    const s = storage();
+    const c = controller({ optional: ["b", "missing"], storage: s });
+    const before = c.intent.value;
+    c.open("missing", 0);
+    c.close("missing");
+    c.close("b");
+    c.close("a");
+    expect(c.intent.value).toEqual(before);
+    expect(s.setItem).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1] as const)("closing the shown tab in pane %i uses its previously viewed tab", (pane) => {
+    const s = storage();
+    const c = controller({ optional: ["c", "d"], storage: s });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    c.open("c", pane);
+    c.open("d", pane);
+    c.select(pane, "c");
+    const order = [...c.intent.value.order];
+    const writes = s.setItem.mock.calls.length;
+    c.close("c");
+    expect(c.panes.value[pane]?.active).toBe("d");
+    expect(c.intent.value.order).toEqual(order);
+    expect(c.intent.value.opened).toEqual(["d"]);
+    expect(c.paneOf("c")).toBeNull();
+    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
+  });
+
+  it.each([0, 1] as const)("closing the last tab of pane %i merges and keeps the other shown tab", (pane) => {
+    const s = storage();
+    const c = controller({ tabs: ["a", "b"], optional: ["b"], storage: s });
+    c.open("b", 0);
+    c.setContainerSize(606, 406);
+    c.splitAt("b", "cols", pane === 0 ? "start" : "end");
+    c.commitRatio(0.6);
+    c.setRatioLive(0.7);
+    const writes = s.setItem.mock.calls.length;
+    c.close("b");
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a"], active: "a" }]);
+    expect(c.intent.value.orientation).toBeNull();
+    expect(c.intent.value.second).toEqual([]);
+    expect(c.intent.value.secondActive).toBe("");
+    expect(c.ratio.value).toBe(0.6);
+    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
+  });
+
+  it("closing an inactive tab preserves both shown tabs", () => {
+    const c = controller({ optional: ["c"] });
+    c.setContainerSize(606, 406);
+    c.split("b", "rows");
+    c.open("c", 0);
+    c.select(0, "d");
+    c.close("c");
+    expect(c.panes.value.map((p) => p.active)).toEqual(["d", "b"]);
+  });
+
+  it("persists opened per entry, retains absent ids, and never writes for reactive tab/optional/size changes", () => {
+    const s = storage();
+    const tabs = ref(["a", "b", "c"]);
+    const optional = ref(["b", "c"]);
+    const key = ref("one");
+    const c = controller({ tabs, optional: () => optional.value, storage: s, entryKey: key });
+    c.open("b", 0);
+    const writes = s.setItem.mock.calls.length;
+    tabs.value = ["a", "c"];
+    expect(c.opened.value).toEqual([]);
+    expect(c.intent.value.opened).toEqual(["b"]);
+    optional.value = ["b"];
+    expect(c.panes.value[0]?.tabs).toEqual(["a", "c"]);
+    tabs.value = ["a", "b", "c"];
+    expect(c.opened.value).toEqual(["b"]);
+    c.setContainerSize(606, 406);
+    c.setContainerSize(100, 100);
+    expect(s.setItem).toHaveBeenCalledTimes(writes);
+    key.value = "two";
+    expect(c.opened.value).toEqual([]);
+    c.open("b", 0);
+    c.close("b");
+    key.value = "one";
+    expect(c.opened.value).toEqual(["b"]);
+    c.dispose();
+    const loaded = controller({ tabs, optional, storage: s, entryKey: "one" });
+    expect(loaded.opened.value).toEqual(["b"]);
+    loaded.dispose();
+  });
+
+  it("exposes readonly opened optional ids in effective order", () => {
+    const c = controller({ optional: ["b", "d"] });
+    c.open("d", 0);
+    c.open("b", 0);
+    expect(c.opened.value).toEqual(["d", "b"]);
+    c.place("b", 0, "d");
+    expect(c.opened.value).toEqual(["b", "d"]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    Reflect.set(c.opened.value, 0, "a");
+    expect(c.opened.value).toEqual(["b", "d"]);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("defaults internal selection to the first visible tab, not a hidden optional tab", () => {
+    const c = controller({ tabs: ["b", "a"], optional: ref(["b"]) });
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a"], active: "a" }]);
+    expect(controller({ tabs: ["b"], optional: ["b"] }).panes.value)
+      .toEqual([{ index: 0, tabs: [], active: "" }]);
+  });
+
+  it("closing after reload uses the order neighbour without history and cannot restore the closed id", () => {
+    const s = storage();
+    const c = controller({ optional: ["b"], storage: s });
+    c.open("b", 0);
+    c.place("b", 0, "c");
+    c.setContainerSize(606, 406);
+    c.split("d", "cols");
+    c.dispose();
+    const loaded = controller({ optional: ["b"], storage: s, active: { get: () => "b", set: vi.fn() } });
+    loaded.setContainerSize(606, 406);
+    loaded.close("b");
+    expect(loaded.intent.value.firstActive).toBe("c");
+    expect(loaded.panes.value[0]?.active).not.toBe("b");
+    loaded.dispose();
+    const reloaded = controller({ optional: ["b"], storage: s });
+    expect(reloaded.restoredActive.value).toBe("c");
+    expect(reloaded.paneOf("b")).toBeNull();
+    reloaded.dispose();
+  });
+});
+
+// Replacement acceptance ledger: exact slot/membership/opened swap in both panes,
+// inactive sources, focus-existing without moving (same/other pane), history fallback,
+// empty-pane merges/live-ratio cleanup, invalid-input no-ops, persistence and one write.
+describe("controller replace", () => {
+  it.each([0, 1] as const)("replaces a shown placeholder in pane %i in its exact ordered slot in one write", (pane) => {
+    const s = storage();
+    const c = controller({ tabs: ["a", "b", "c", "new", "chosen"], optional: ["new", "chosen"], storage: s });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    c.open("new", pane);
+    if (pane === 0) c.place("new", 0, "c");
+    const order = [...c.intent.value.order].filter((id) => id !== "chosen").map((id) => id === "new" ? "chosen" : id);
+    s.setItem.mockClear();
+    c.replace("new", "chosen");
+    expect(c.intent.value.order).toEqual(order);
+    expect(c.panes.value[pane]?.tabs).toEqual(pane === 0 ? ["a", "chosen", "c"] : ["b", "chosen"]);
+    expect(c.paneOf("chosen")).toBe(pane);
+    expect(c.paneOf("new")).toBeNull();
+    expect(c.panes.value.map((p) => p.active)).toEqual(pane === 0 ? ["chosen", "b"] : ["a", "chosen"]);
+    expect(c.intent.value.second).toEqual(pane === 0 ? ["b"] : ["b", "chosen"]);
+    expect(c.intent.value.opened).toEqual(["chosen"]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 1] as const)("replaces an inactive placeholder in pane %i without changing shown tabs", (pane) => {
+    const s = storage();
+    const c = controller({ tabs: ["a", "b", "c", "new", "chosen"], optional: ["new", "chosen"], storage: s });
+    c.setContainerSize(606, 406);
+    c.split("b", "rows");
+    c.open("new", pane);
+    c.select(pane, pane === 0 ? "c" : "b");
+    const shown = c.panes.value.map((p) => p.active);
+    s.setItem.mockClear();
+    c.replace("new", "chosen");
+    expect(c.panes.value.map((p) => p.active)).toEqual(shown);
+    expect(c.paneOf("chosen")).toBe(pane);
+    expect(c.opened.value).toEqual(["chosen"]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 1] as const)("focuses an already-visible tab in the same pane %i without moving it", (pane) => {
+    const s = storage();
+    const c = controller({ tabs: ["a", "b", "c", "new"], optional: ["new"], storage: s });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    c.open("new", pane);
+    const newId = pane === 0 ? "a" : "b";
+    const order = [...c.intent.value.order];
+    s.setItem.mockClear();
+    c.replace("new", newId);
+    expect(c.panes.value.map((p) => p.tabs)).toEqual([["a", "c"], ["b"]]);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "b"]);
+    expect(c.intent.value.order).toEqual(order);
+    expect(c.intent.value.second).toEqual(["b"]);
+    expect(c.opened.value).toEqual([]);
+    expect(c.paneOf(newId)).toBe(pane);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 1] as const)("focuses the other pane while replacing pane %i's shown placeholder with its recent tab", (pane) => {
+    const s = storage();
+    const c = controller({ tabs: ["a", "b", "c", "d", "new"], optional: ["new"], storage: s });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    c.moveTo("d", 1);
+    c.select(pane, pane === 0 ? "c" : "d");
+    c.open("new", pane);
+    const newId = pane === 0 ? "d" : "c";
+    const membership = [...c.intent.value.second].filter((id) => id !== "new");
+    const order = [...c.intent.value.order];
+    s.setItem.mockClear();
+    c.replace("new", newId);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "d"]);
+    expect(c.paneOf(newId)).toBe(pane === 0 ? 1 : 0);
+    expect(c.intent.value.second).toEqual(membership);
+    expect(c.intent.value.order).toEqual(order);
+    expect(c.paneOf("new")).toBeNull();
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 1] as const)("merges when the placeholder is the only tab of pane %i, then focuses the existing target", (pane) => {
+    const s = storage();
+    const c = controller({ tabs: ["a", "b", "new"], optional: ["new"], storage: s });
+    c.open("new", 0);
+    c.setContainerSize(606, 406);
+    c.splitAt("new", "cols", pane === 0 ? "start" : "end");
+    c.commitRatio(0.6);
+    c.setRatioLive(0.7);
+    s.setItem.mockClear();
+    c.replace("new", "b");
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a", "b"], active: "b" }]);
+    expect(c.intent.value.second).toEqual([]);
+    expect(c.intent.value.orientation).toBeNull();
+    expect(c.intent.value.secondActive).toBe("");
+    expect(c.intent.value.firstActive).toBe("b");
+    expect(c.ratio.value).toBe(0.6);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("focuses an existing optional target without forgetting its open state", () => {
+    const s = storage();
+    const c = controller({ optional: ["b", "c"], storage: s });
+    c.open("b", 0);
+    c.open("c", 0);
+    s.setItem.mockClear();
+    c.replace("c", "b");
+    expect(c.opened.value).toEqual(["b"]);
+    expect(c.panes.value[0]?.active).toBe("b");
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])("replaces a host-deep-linked pane-1 placeholder with an %s existing target", (existing) => {
+    const s = storage();
+    const active = ref("a");
+    const set = vi.fn((id: string) => { active.value = id; });
+    const c = controller({ tabs: ["a", "b", "new", "chosen"], optional: ["new", "chosen"], storage: s,
+      active: { get: () => active.value, set },
+    });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    if (existing) c.open("chosen", 1);
+    c.open("new", 1);
+    active.value = "new";
+    set.mockClear();
+    s.setItem.mockClear();
+    c.replace("new", "chosen");
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "chosen"]);
+    expect(c.paneOf("chosen")).toBe(1);
+    expect(c.paneOf("new")).toBeNull();
+    expect(set).toHaveBeenCalledExactlyOnceWith("a");
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates intent before calling the host setter, so primary replacement records one coherent selection", () => {
+    const s = storage();
+    const active = ref("a");
+    const observed: string[] = [];
+    const c = controller({ optional: ["b", "c"], storage: s, active: {
+      get: () => active.value,
+      set: (id) => {
+        const saved = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { intent: { firstActive: string } }[] };
+        observed.push(saved.entries[0]?.intent.firstActive ?? "");
+        active.value = id;
+      },
+    } });
+    c.open("b", 0);
+    observed.length = 0;
+    s.setItem.mockClear();
+    c.replace("b", "c");
+    expect(observed).toEqual(["c"]);
+    expect(c.panes.value[0]?.active).toBe("c");
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears stale target membership, transfers the slot and persists replacement across re-creation", () => {
+    const s = storage();
+    const options = { tabs: ["a", "b", "new", "chosen"], optional: ["new", "chosen"], storage: s };
+    const c = controller(options);
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    c.open("chosen", 1);
+    c.close("chosen");
+    c.open("new", 0);
+    c.place("new", 0, "a");
+    s.setItem.mockClear();
+    c.replace("new", "chosen");
+    expect(c.intent.value.order).toEqual(["chosen", "a", "b"]);
+    expect(c.intent.value.second).toEqual(["b"]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+    c.dispose();
+    const restored = controller(options);
+    restored.setContainerSize(606, 406);
+    expect(restored.opened.value).toEqual(["chosen"]);
+    expect(restored.intent.value.order).toEqual(["chosen", "a", "b"]);
+    expect(restored.panes.value.map((p) => p.tabs)).toEqual([["chosen", "a"], ["b"]]);
+    expect(restored.restoredActive.value).toBe("chosen");
+    restored.dispose();
+  });
+
+  it.each([["missing", "b"], ["c", "b"], ["b", "missing"], ["b", "b"]])("ignores replacement %s -> %s", (oldId, newId) => {
+    const s = storage();
+    const c = controller({ optional: ["c"], storage: s });
+    const value = c.intent.value;
+    c.replace(oldId, newId);
+    expect(c.intent.value).toEqual(value);
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a", "b", "d"], active: "a" }]);
+    expect(s.setItem).not.toHaveBeenCalled();
+  });
+});
+
 describe("controller", () => {
   it("defaults to the first tab and supports an empty list", () => {
     const c = controller();
@@ -149,7 +551,7 @@ describe("controller", () => {
     c.split("b", "rows");
     c.commitRatio(0.6);
     c.merge();
-    expect(c.intent.value).toEqual({ orientation: null, firstActive: "", order: [], second: [], secondActive: "", ratio: 0.6 });
+    expect(c.intent.value).toEqual({ orientation: null, firstActive: "", order: [], opened: [], second: [], secondActive: "", ratio: 0.6 });
     expect(c.ratio.value).toBe(0.6);
     c.split("c", "cols");
     expect(c.ratio.value).toBe(0.6);
@@ -224,7 +626,9 @@ describe("controller", () => {
     c.dispose();
     const previous = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { stamp: number }[] };
     const restored = controller({ storage: s });
-    expect(restored.intent.value).toEqual({ orientation: "rows", firstActive: "a", order: [], second: ["b", "d"], secondActive: "b", ratio: 0.7 });
+    expect(restored.intent.value).toEqual({
+      orientation: "rows", firstActive: "a", order: [], opened: [], second: ["b", "d"], secondActive: "b", ratio: 0.7,
+    });
     const bumped = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { stamp: number }[] };
     expect(bumped.entries[0]?.stamp).toBe((previous.entries[0]?.stamp ?? 0) + 1);
     const writes = s.setItem.mock.calls.length;
@@ -334,7 +738,9 @@ describe("controller restoration", () => {
     c.select(0, "c");
     expect(c.intent.value.firstActive).toBe("c");
     expect(s.setItem).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(s.setItem.mock.calls[0]?.[1] ?? "null")).toEqual({ entries: [{ key: "page", stamp: 1, intent: { orientation: null, firstActive: "c", order: [], second: [], secondActive: "", ratio: 0.5 } }] });
+    expect(JSON.parse(s.setItem.mock.calls[0]?.[1] ?? "null")).toEqual({ entries: [{ key: "page", stamp: 1, intent: {
+      orientation: null, firstActive: "c", order: [], opened: [], second: [], secondActive: "", ratio: 0.5,
+    } }] });
     expect(c.restoredActive.value).toBe("");
     c.setContainerSize(606, 406);
     c.split("b", "rows");
@@ -376,7 +782,9 @@ describe("controller restoration", () => {
     c.split("b", "cols");
     const writes = s.setItem.mock.calls.length;
     c.moveToOther(id);
-    expect(c.intent.value).toEqual({ orientation: null, firstActive: id === "a" ? "b" : "a", order: [], second: [], secondActive: "", ratio: 0.5 });
+    expect(c.intent.value).toEqual({
+      orientation: null, firstActive: id === "a" ? "b" : "a", order: [], opened: [], second: [], secondActive: "", ratio: 0.5,
+    });
     expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
     expect(c.restoredActive.value).toBe("");
     c.merge();
@@ -464,7 +872,7 @@ describe("controller restoration", () => {
     const s = storage();
     s.values.set("layouts", JSON.stringify({ entries: [{ key: "page", stamp: 4, intent: { orientation: "cols", second: ["b"], secondActive: "b", ratio: 0.7 } }] }));
     const c = controller({ storage: s });
-    expect(c.intent.value).toEqual({ orientation: "cols", firstActive: "", order: [], second: ["b"], secondActive: "b", ratio: 0.7 });
+    expect(c.intent.value).toEqual({ orientation: "cols", firstActive: "", order: [], opened: [], second: ["b"], secondActive: "b", ratio: 0.7 });
     expect(c.restoredActive.value).toBe("");
     c.setContainerSize(606, 406);
     expect(c.isSplit.value).toBe(true);

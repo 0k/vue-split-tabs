@@ -19,6 +19,133 @@ function startSplit(o: Orientation = "cols") {
   return layout(c);
 }
 
+// Acceptance ledger: label + first-icon close grouped in an active title span,
+// no selection/drag side effects, conditional end slot outside items, no drop target.
+describe("on-demand strip controls", () => {
+  // splitButtons acceptance: default-on in both layouts; false removes only
+  // split/move controls, keeping close/end and keyboard reorder/focus alive.
+  it.each([false, true])("splitButtons only disables split/move icons, split layout=%s", async (split) => {
+    const c = controller({ optional: ["b"] });
+    c.open("b", 0);
+    c.setContainerSize(606, 406);
+    if (split) c.split("d", "cols");
+    const wrapper = mount(SplitTabStrip, { attachTo: document.body, props: {
+      controller: c, pane: 0, labels: { ...labels, close: "Close" },
+    }, slots: { end: () => h("button", { type: "button" }, "Add") } });
+    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(split ? 3 : 8);
+    await wrapper.setProps({ splitButtons: false });
+    expect(wrapper.find(".split-tab-strip-send").exists()).toBe(false);
+    expect(wrapper.get(".split-tab-strip-end").text()).toBe("Add");
+    expect(wrapper.findAll(".split-tab-strip-close")).toHaveLength(1);
+    const button = wrapper.get<HTMLButtonElement>('[data-split-tabs-tab="a"] .split-tab-strip-tab');
+    button.element.focus();
+    await button.trigger("keydown", { key: "ArrowRight", altKey: true, shiftKey: true });
+    expect(c.panes.value[0]?.tabs).toEqual(split ? ["c", "a", "b"] : ["c", "a", "d", "b"]);
+    expect(document.activeElement).toBe(button.element);
+    await wrapper.get(".split-tab-strip-close").trigger("click");
+    expect(c.paneOf("b")).toBeNull();
+    await wrapper.setProps({ splitButtons: true });
+    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(split ? 2 : 6);
+  });
+
+  it("renders close only for optional tabs with a close label and closes without selecting or dragging", async () => {
+    const c = controller({ optional: ["b"] });
+    c.open("b", 0);
+    c.select(0, "a");
+    const wrapper = mount(SplitTabs, { attachTo: document.body, props: {
+      controller: c, labels: { divider: "Resize" }, stripLabels: { ...labels, close: "Close tab" },
+    } });
+    const close = wrapper.get<HTMLButtonElement>(".split-tab-strip-close");
+    expect(wrapper.findAll(".split-tab-strip-close")).toHaveLength(1);
+    expect(close.element.closest("[data-split-tabs-tab]")?.getAttribute("data-split-tabs-tab")).toBe("b");
+    expect(close.element.parentElement?.classList.contains("split-tab-strip-title")).toBe(true);
+    expect(close.attributes("aria-label")).toBe("Close tab");
+    expect(close.attributes("title")).toBe("Close tab");
+    expect(close.get("svg").attributes("stroke-width")).toBe("2");
+    expect(close.element.tabIndex).toBe(0);
+    expect(wrapper.find("button button").exists()).toBe(false);
+    const select = vi.spyOn(c, "select");
+    pointer(close.element, "pointerdown");
+    pointer(window, "pointermove", { clientX: 100 });
+    expect(document.querySelector(".split-tabs-drag-ghost")).toBeNull();
+    pointer(window, "pointerup");
+    await close.trigger("click");
+    expect(select).not.toHaveBeenCalled();
+    expect(c.panes.value[0]?.active).toBe("a");
+    expect(c.paneOf("b")).toBeNull();
+    expect(wrapper.find(".split-tab-strip-close").exists()).toBe(false);
+  });
+
+  it("puts close immediately after the label in the title span, before split/move icons, with the host hook", async () => {
+    const c = controller({ optional: ["b"] });
+    c.open("b", 0);
+    c.setContainerSize(606, 406);
+    const plain = mount(SplitTabStrip, { props: { controller: c, pane: 0, labels } });
+    expect(plain.find(".split-tab-strip-close").exists()).toBe(false);
+    const wrapper = mount(SplitTabStrip, { props: {
+      controller: c, pane: 0, labels: { ...labels, close: "Close" }, iconClass: "host-icon",
+    } });
+    const item = wrapper.get('[data-split-tabs-tab="b"]');
+    const title = item.get(".split-tab-strip-title");
+    expect(title.element.tagName).toBe("SPAN");
+    expect(item.element.firstElementChild).toBe(title.element);
+    expect([...title.element.children].map((child) => child.className))
+      .toEqual(["split-tab-strip-tab split-tab-strip-tab--active", "split-tab-strip-close host-icon"]);
+    expect(item.get(".split-tab-strip-close").classes()).toContain("host-icon");
+    expect([...item.element.children].slice(1).map((child) => child.className))
+      .toEqual(["split-tab-strip-send host-icon", "split-tab-strip-send host-icon"]);
+    expect(title.classes()).toContain("split-tab-strip-title--active");
+    expect(title.get(".split-tab-strip-tab").attributes("aria-pressed")).toBe("true");
+    c.select(0, "a");
+    await nextTick();
+    expect(title.classes()).not.toContain("split-tab-strip-title--active");
+    expect(title.get(".split-tab-strip-tab").classes()).not.toContain("split-tab-strip-tab--active");
+    c.split("d", "cols");
+    await nextTick();
+    expect([...item.element.children].slice(1).map((child) => child.className)).toEqual(["split-tab-strip-send host-icon"]);
+  });
+
+  it("renders end only when provided, after tabs and outside items, without changing visibility", () => {
+    const props = { tabs: ["a"], active: "a" };
+    const absent = mount(SplitTabStrip, { props });
+    expect(absent.find(".split-tab-strip-end").exists()).toBe(false);
+    const wrapper = mount(SplitTabStrip, { attachTo: document.body, props,
+      slots: { end: () => h("button", { type: "button" }, "Add") },
+    });
+    expect(wrapper.isVisible()).toBe(false);
+    const end = wrapper.get(".split-tab-strip-end");
+    expect(end.text()).toBe("Add");
+    expect(end.element).toBe(wrapper.element.lastElementChild);
+    expect(end.element.previousElementSibling?.classList.contains("split-tab-strip-item")).toBe(true);
+    expect(end.element.closest("[data-split-tabs-tab]")).toBeNull();
+    expect(end.attributes("draggable")).not.toBe("true");
+  });
+
+  it("does not start a drag from end content or accept drops over it", async () => {
+    const c = controller();
+    const wrapper = mount(SplitTabs, { attachTo: document.body,
+      props: { controller: c, labels: { divider: "Resize" } },
+      slots: { pane: () => h(SplitTabStrip, { controller: c, pane: 0, labels }, {
+        end: () => h("button", { type: "button" }, "Add"),
+      }) },
+    });
+    const end = wrapper.get(".split-tab-strip-end button").element;
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => end });
+    const place = vi.spyOn(c, "place");
+    pointer(end, "pointerdown");
+    pointer(window, "pointermove", { clientX: 100 });
+    expect(document.querySelector(".split-tabs-drag-ghost")).toBeNull();
+    pointer(window, "pointerup");
+    pointer(wrapper.get(".split-tab-strip-tab").element, "pointerdown");
+    pointer(window, "pointermove", { clientX: 100 });
+    await nextTick();
+    expect(wrapper.find(".split-tab-strip-marker").exists()).toBe(false);
+    pointer(window, "pointerup", { clientX: 100 });
+    expect(place).not.toHaveBeenCalled();
+    expect(document.querySelector(".split-tabs-drag-ghost")).toBeNull();
+  });
+});
+
 describe("SplitTabs", () => {
   it("renders a selectable default strip without offering unlabelled controls", async () => {
     const c = controller();

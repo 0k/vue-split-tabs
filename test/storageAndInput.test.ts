@@ -26,6 +26,35 @@ function gestureFixture() {
 }
 
 describe("shared storage and ratio intent", () => {
+  it.each([undefined, "", ["b", "absent"]])("loads tolerant opened intent %j and retains absent ids on actions", (opened) => {
+    const s = storage();
+    s.values.set("layouts", JSON.stringify({ entries: [{ key: "page", stamp: 1, intent: {
+      orientation: null, firstActive: "", order: [], second: [], secondActive: "", ratio: 0.5, opened,
+    } }] }));
+    const c = controller({ optional: ["b"], storage: s });
+    expect(c.intent.value.opened).toEqual(Array.isArray(opened) ? opened : []);
+    expect(c.opened.value).toEqual(Array.isArray(opened) ? ["b"] : []);
+    c.select(0, "c");
+    const table = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { intent: { opened: string[] } }[] };
+    expect(table.entries[0]?.intent.opened).toEqual(Array.isArray(opened) ? opened : []);
+  });
+
+  it.each([null, 3, ["b", 7]])("rejects only the entry with malformed opened %j, preserving its valid neighbour", (opened) => {
+    const s = storage();
+    const intent = { orientation: null, firstActive: "a", order: [], second: [], secondActive: "", ratio: 0.5 };
+    s.values.set("layouts", JSON.stringify({ entries: [
+      { key: "page", stamp: 1, intent: { ...intent, opened } },
+      { key: "other", stamp: 2, intent: { ...intent, opened: ["b"] } },
+    ] }));
+    const key = ref("page");
+    const c = controller({ optional: ["b"], storage: s, entryKey: key });
+    expect(c.intent.value.firstActive).toBe("");
+    expect(c.opened.value).toEqual([]);
+    key.value = "other";
+    expect(c.opened.value).toEqual(["b"]);
+    c.dispose();
+  });
+
   it("shared controllers preserve each other's persisted entries on interleaved writes", () => {
     const s = storage();
     const a = controller({ storage: s, entryKey: "a" });
