@@ -83,28 +83,32 @@ describe("controller", () => {
     c.setContainerSize(600, 400);
     c.split("b", "rows");
     c.moveTo("d", 1);
+    c.select(1, "d");
     a.value = "b";
     expect(c.panes.value.map((p) => p.active)).toEqual(["a", "b"]);
     a.value = "c";
     expect(c.panes.value.map((p) => p.active)).toEqual(["c", "d"]);
     c.moveTo("d", 0);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["d", "b"]);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "b"]);
   });
 
-  it("moves both ways, chooses active neighbors, and selects same-pane moves", () => {
+  it("moves both ways behind the shown tabs, chooses active neighbors, and selects same-pane moves", () => {
     const c = controller();
     c.setContainerSize(600, 400);
     c.split("b", "rows");
     c.moveToOther("a");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "a"]);
+    expect(c.panes.value.map((p) => p.tabs)).toEqual([["c", "d"], ["a", "b"]]);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "b"]);
     c.moveTo("a", 0);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "b"]);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "b"]);
     c.moveTo("d", 1);
+    c.select(1, "d");
     c.moveTo("b", 1);
     expect(c.panes.value[1]?.active).toBe("b");
     c.moveTo("b", 0);
     expect(c.intent.value.secondActive).toBe("d");
     expect(c.panes.value[0]?.tabs).toEqual(["a", "b", "c"]);
+    expect(c.panes.value[0]?.active).toBe("c");
   });
 
   it.each([0, 1] as const)("merges when moving the last present tab out of pane %i", (pane) => {
@@ -116,7 +120,7 @@ describe("controller", () => {
     expect(c.isSplit.value).toBe(false);
     expect(c.intent.value.second).toEqual([]);
     expect(c.intent.value.orientation).toBeNull();
-    expect(c.panes.value[0]?.active).toBe(id);
+    expect(c.panes.value[0]?.active).toBe(pane === 0 ? "b" : "a");
   });
 
   it("validates action pane/membership and persists only changed intent", () => {
@@ -254,6 +258,7 @@ describe("controller", () => {
     c.setContainerSize(606, 406);
     c.split("b", "cols");
     c.moveTo("d", 1);
+    c.select(1, "d");
     tabs.value = ["a", "b", "c"];
     expect(c.panes.value[1]?.active).toBe("b");
     expect(c.intent.value.secondActive).toBe("d");
@@ -359,9 +364,9 @@ describe("controller restoration", () => {
     expect(c.intent.value.firstActive).toBe("c");
     expect(s.setItem).toHaveBeenCalledTimes(2);
     c.moveTo("a", 0);
-    expect(c.intent.value.firstActive).toBe("a");
+    expect(c.intent.value.firstActive).toBe("c");
     expect(s.setItem).toHaveBeenCalledTimes(3);
-    expect(observed).toEqual(["b", "c", "a"]);
+    expect(observed).toEqual(["b", "c"]);
   });
 
   it.each(["a", "b"])("records last-tab move %s with merge in one write", (id) => {
@@ -371,7 +376,7 @@ describe("controller restoration", () => {
     c.split("b", "cols");
     const writes = s.setItem.mock.calls.length;
     c.moveToOther(id);
-    expect(c.intent.value).toEqual({ orientation: null, firstActive: id, order: [], second: [], secondActive: "", ratio: 0.5 });
+    expect(c.intent.value).toEqual({ orientation: null, firstActive: id === "a" ? "b" : "a", order: [], second: [], secondActive: "", ratio: 0.5 });
     expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
     expect(c.restoredActive.value).toBe("");
     c.merge();
@@ -433,8 +438,8 @@ describe("controller restoration", () => {
     active.value = "a";
     c.setContainerSize(606, 406);
     c.moveTo("c", 1);
-    expect(c.intent.value.firstActive).toBe("c");
-    expect(c.restoredActive.value).toBe("");
+    expect(c.intent.value.firstActive).toBe("a");
+    expect(c.restoredActive.value).toBe("a");
     expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
   });
 
@@ -484,5 +489,132 @@ describe("controller restoration", () => {
     key.value = "other";
     expect(c.restoredActive.value).toBe("c");
     c.dispose();
+  });
+});
+
+describe("controller tab history", () => {
+  function hosted(overrides: Parameters<typeof controller>[0] = {}) {
+    const explicit = ref<string | undefined>(undefined);
+    const set = vi.fn((id: string) => { explicit.value = id; });
+    const c: ReturnType<typeof controller> = controller({
+      active: { get: () => explicit.value ?? (c.restoredActive.value || "a"), set }, ...overrides,
+    });
+    c.setContainerSize(606, 406);
+    return { c, explicit, set };
+  }
+
+  it("keeps the previous tab on top when the selected tab is sent to the other pane", () => {
+    const { c } = hosted();
+    c.select(0, "c");
+    c.split("c", "rows");
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
+    expect(c.intent.value.firstActive).toBe("a");
+  });
+
+  it("uses the most recent tab still in the top pane, skipping tabs sent to the other pane", () => {
+    const { c } = hosted({ tabs: ["a", "b", "c", "d", "e"] });
+    c.select(0, "e");
+    c.select(0, "a");
+    c.select(0, "c");
+    c.split("c", "rows");
+    expect(c.panes.value[0]?.active).toBe("a");
+    c.select(0, "d");
+    c.select(0, "b");
+    c.moveToOther("d");
+    c.moveToOther("b");
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
+  });
+
+  it("falls back to the neighbor without history, and history is per page and memory-only", () => {
+    const s = storage();
+    const key = ref("page");
+    const { c, explicit } = hosted({ storage: s, entryKey: key });
+    c.select(0, "d");
+    key.value = "other";
+    explicit.value = "b";
+    c.split("b", "cols");
+    expect(c.panes.value[0]?.active).toBe("c");
+    expect(s.values.get("layouts")).not.toContain("history");
+  });
+
+  it("picks the recent tab for the other pane when dragging the selected tab to the start", () => {
+    const { c } = hosted();
+    c.select(0, "d");
+    c.select(0, "b");
+    c.splitAt("b", "cols", "start");
+    expect(c.panes.value.map((p) => p.active)).toEqual(["b", "d"]);
+  });
+});
+
+describe("controller move-to-other keeps what the destination shows", () => {
+  function hosted(tabs: string[] = ["a", "b", "c", "d"]) {
+    const explicit = ref<string | undefined>(undefined);
+    const c: ReturnType<typeof controller> = controller({
+      tabs, active: { get: () => explicit.value ?? (c.restoredActive.value || "a"), set: (id) => { explicit.value = id; } },
+    });
+    c.setContainerSize(606, 406);
+    return { c, explicit };
+  }
+  const shown = (c: ReturnType<typeof controller>) => c.panes.value.map((p) => p.active);
+
+  it("puts a tab sent up behind the top pane's shown tab", () => {
+    const { c } = hosted();
+    c.split("b", "rows");
+    c.moveTo("d", 1);
+    c.select(1, "d");
+    c.moveToOther("d");
+    expect(c.panes.value.map((p) => p.tabs)).toEqual([["a", "c", "d"], ["b"]]);
+    expect(shown(c)).toEqual(["a", "b"]);
+    expect(c.intent.value.firstActive).toBe("a");
+  });
+
+  it("puts a tab sent down behind the bottom pane's shown tab, the top showing the previous tab", () => {
+    const { c } = hosted();
+    c.split("b", "rows");
+    c.select(0, "d");
+    c.select(0, "c");
+    c.moveToOther("c");
+    expect(c.panes.value.map((p) => p.tabs)).toEqual([["a", "d"], ["b", "c"]]);
+    expect(shown(c)).toEqual(["d", "b"]);
+  });
+
+  it.each([
+    { from: "bottom", id: "b", expected: "a" },
+    { from: "top", id: "a", expected: "b" },
+  ])("keeps the destination's shown tab when moving the last $from tab merges", ({ id, expected }) => {
+    const { c } = hosted(["a", "b"]);
+    c.split("b", "rows");
+    c.moveToOther(id);
+    expect(c.isSplit.value).toBe(false);
+    expect(shown(c)).toEqual([expected]);
+    expect(c.intent.value.firstActive).toBe(expected);
+  });
+
+  it("replaces the shown bottom tab with the last one viewed there", () => {
+    const { c } = hosted(["a", "b", "c", "d", "e"]);
+    c.split("b", "rows");
+    c.moveTo("c", 1);
+    c.moveTo("d", 1);
+    c.select(1, "d");
+    c.select(1, "b");
+    c.moveToOther("b");
+    expect(shown(c)).toEqual(["a", "d"]);
+  });
+
+  it("keeps the top pane's tab when the host deep-links the bottom tab being moved", () => {
+    const { c, explicit } = hosted();
+    c.split("b", "rows");
+    explicit.value = "b";
+    expect(shown(c)).toEqual(["a", "b"]);
+    c.moveTo("c", 1);
+    c.moveToOther("b");
+    expect(shown(c)).toEqual(["a", "c"]);
+  });
+
+  it("still reveals a tab dropped into the other pane", () => {
+    const { c } = hosted();
+    c.split("b", "rows");
+    c.place("b", 0, null);
+    expect(shown(c)[0]).toBe("b");
   });
 });

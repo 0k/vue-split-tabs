@@ -19,9 +19,21 @@ storage keys, routing, data, and themes.
 - Record `firstActive` only in controller user actions: primary selection and
   every host active setter call, in the same single intent write as the action.
   Never learn it from host navigation or derived size/tab changes. Explicit
-  merge clears it; a merge-by-move records the moved id. `restoredActive` is a
+  merge clears it; a merge-by-drop records the dropped id, a merge-by-move the
+  tab the destination pane was showing. `restoredActive` is a
   host-consumed request, not an automatic host selection, and remains available
   for valid pane-0 membership in split intent while collapsed for size.
+  Splitting off or moving a tab other than the shown one records the shown tab as
+  `firstActive`, overriding any older request.
+- `moveTo`/`moveToOther` (the move icon) put the tab away: it goes behind the
+  destination pane's shown tab, which stays shown, in both directions and after
+  a merge. Only drag-and-drop (`place`) reveals the moved tab where it is dropped.
+- When the shown tab leaves its pane (split, move, cross-pane place, start-side
+  split), the replacement is the most recently viewed tab still in that pane,
+  falling back to the order neighbor. The view history is memory-only, one per
+  pane and entry key, cleared on key change, never persisted; it is learned only inside
+  controller actions (the tabs shown when acting, and each tab the controller
+  selects), never from host navigation between actions.
 - The per-page intent table is bounded LRU; existing-entry reads and committed
   user actions bump monotonically increasing recency stamps.
 - Refresh and validate shared storage before writing; replace only this

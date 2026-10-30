@@ -155,6 +155,9 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
   const width = ref(0);
   const height = ref(0);
   const liveRatio = ref<number | null>(null);
+  // Per pane, tabs in the order the user last viewed them there, most recent last. Memory-only and per page:
+  // learned from controller actions (the tabs shown when acting, and every tab the controller selects).
+  const visits: [string[], string[]] = [[], []];
   function initial(): SplitTabsIntent { return { orientation: null, firstActive: "", order: [], second: [], secondActive: "", ratio: defaultRatio }; }
   const state = ref<SplitTabsIntent>(initial());
   const fullOrder = computed(() => completeOrder(state.value.order, present.value));
@@ -195,6 +198,8 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     const existing = entries.find((entry) => entry.key === key);
     state.value = existing === undefined ? initial() : copy(existing.intent);
     liveRatio.value = null;
+    visits[0].length = 0;
+    visits[1].length = 0;
     if (existing !== undefined) touch(key, existing.intent);
   }, { immediate: true, flush: "sync" });
 
@@ -234,6 +239,28 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     if (available < 2 * min || available <= 0) return display ? defaultRatio : normalized;
     return Math.max(min / available, Math.min(1 - min / available, value));
   }
+  function visit(pane: PaneIndex, id: string): void {
+    if (id === "") return;
+    const list = visits[pane];
+    const at = list.indexOf(id);
+    if (at >= 0) list.splice(at, 1);
+    list.push(id);
+  }
+  function shown(pane: PaneIndex): string { return panes.value.find((p) => p.index === pane)?.active ?? ""; }
+  function visitShown(): void { visit(0, shown(0)); if (isSplit.value) visit(1, shown(1)); }
+  function setActive(id: string): void {
+    visit(0, id);
+    active.set(id);
+  }
+  /** Replacement for the shown tab `id` leaving `from` in `pane`: the last viewed remaining tab there, else its neighbor. */
+  function previousOf(pane: PaneIndex, id: string, from: readonly string[], remaining: readonly string[]): string {
+    const list = visits[pane];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const candidate = list[i];
+      if (candidate !== undefined && candidate !== id && remaining.includes(candidate)) return candidate;
+    }
+    return neighbor(id, from, remaining);
+  }
   function update(next: SplitTabsIntent): void {
     if (JSON.stringify(next) === JSON.stringify(state.value)) return;
     state.value = next;
@@ -249,18 +276,23 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
   }
   function select(pane: PaneIndex, id: string): void {
     if ((pane !== 0 && pane !== 1) || paneOf(id) !== pane) return;
+    visitShown();
     if (pane === 0) {
       update({ ...state.value, firstActive: id });
-      active.set(id);
+      setActive(id);
     }
-    else update({ ...state.value, secondActive: id });
+    else {
+      visit(1, id);
+      update({ ...state.value, secondActive: id });
+    }
   }
   function relocation(id: string, source: PaneIndex, pane: PaneIndex): { intent: SplitTabsIntent; active: string | null } {
     const from = source === 0 ? first.value : second.value;
     const remaining = from.filter((tab) => tab !== id);
+    visitShown();
     if (remaining.length === 0) return { intent: { ...state.value, orientation: null, firstActive: id, second: [], secondActive: "" }, active: id };
     if (pane === 1) {
-      const nextActive = active.get() === id ? neighbor(id, from, remaining) : null;
+      const nextActive = active.get() === id ? previousOf(0, id, from, remaining) : null;
       return {
         intent: {
           ...state.value,
@@ -274,18 +306,40 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     return { intent: { ...state.value,
         firstActive: id,
         second: state.value.second.filter((tab) => tab !== id),
-        secondActive: state.value.secondActive === id ? neighbor(id, from, remaining) : state.value.secondActive,
+        secondActive: state.value.secondActive === id ? previousOf(1, id, from, remaining) : state.value.secondActive,
       }, active: id };
+  }
+  /** Move without revealing: `id` goes behind the destination's shown tab, which stays shown (also after a merge). */
+  function stow(id: string, source: PaneIndex, pane: PaneIndex): { intent: SplitTabsIntent; active: string } {
+    const top = shown(0);
+    const bottom = shown(1);
+    const from = source === 0 ? first.value : second.value;
+    const remaining = from.filter((tab) => tab !== id);
+    visitShown();
+    if (remaining.length === 0) {
+      const kept = pane === 0 ? top : bottom;
+      return { intent: { ...state.value, orientation: null, firstActive: kept, second: [], secondActive: "" }, active: kept };
+    }
+    if (pane === 1) {
+      const nextTop = top === id ? previousOf(0, id, from, remaining) : top;
+      return { intent: { ...state.value, firstActive: nextTop, second: [...state.value.second, id], secondActive: bottom }, active: nextTop };
+    }
+    const nextBottom = bottom === id ? previousOf(1, id, from, remaining) : bottom;
+    visit(1, nextBottom);
+    return {
+      intent: { ...state.value, firstActive: top, second: state.value.second.filter((tab) => tab !== id), secondActive: nextBottom },
+      active: top,
+    };
   }
   function moveTo(id: string, pane: PaneIndex): void {
     if (!isSplit.value || (pane !== 0 && pane !== 1)) return;
     const source = paneOf(id);
     if (source === null) return;
     if (source === pane) { select(pane, id); return; }
-    const next = relocation(id, source, pane);
+    const next = stow(id, source, pane);
     update(next.intent);
     if (next.intent.orientation === null) liveRatio.value = null;
-    if (next.active !== null) active.set(next.active);
+    if (next.active !== active.get()) setActive(next.active);
   }
   function place(id: string, pane: PaneIndex, beforeId: string | null): void {
     if ((pane !== 0 && pane !== 1) || (beforeId !== null && typeof beforeId !== "string")) return;
@@ -303,7 +357,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     const next = source === pane ? { intent: state.value, active: null } : relocation(id, source, pane);
     update({ ...next.intent, order });
     if (next.intent.orientation === null) liveRatio.value = null;
-    if (next.active !== null) active.set(next.active);
+    if (next.active !== null) setActive(next.active);
   }
   function applySplit(id: string, o: Orientation, side: SplitSide, ratio: number): void {
     if (
@@ -312,14 +366,16 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     ) return;
     const others = ordered.value.filter((tab) => tab !== id);
     const previous = active.get();
-    const adjacent = neighbor(id, ordered.value, others);
+    visit(0, previous);
+    const replacement = previousOf(0, id, ordered.value, others);
     if (side === "start") {
-      update({ ...state.value, orientation: o, ratio, firstActive: id, second: others, secondActive: others.includes(previous) ? previous : adjacent });
-      active.set(id);
+      update({ ...state.value, orientation: o, ratio, firstActive: id, second: others, secondActive: others.includes(previous) ? previous : replacement });
+      setActive(id);
     } else {
-      const nextActive = previous === id ? adjacent : null;
+      // The top pane keeps showing what the user saw, so record it over any older request.
+      const nextActive = previous === id ? replacement : null;
       update({ ...state.value, orientation: o, ratio, firstActive: nextActive ?? previous, second: [id], secondActive: id });
-      if (nextActive !== null) active.set(nextActive);
+      if (nextActive !== null) setActive(nextActive);
     }
     liveRatio.value = null;
   }

@@ -139,25 +139,30 @@ Plain strip mode needs no controller or labels:
 - ~place(id, pane, beforeId)~ moves a tab before another tab in the destination
   pane, or to that pane's end for ~null~. Same-pane placement only reorders,
   including pane 0 in single layout; it does not select. Cross-pane placement
-  follows move selection/neighbor rules. Order, membership and selection share
+  reveals the dropped tab in its destination pane (through the host binding for
+  pane 0). Order, membership and selection share
   one write. Invalid ids, panes, destination references, or current-slot drops
-  are no-ops. Moving the last tab out of a source merges, keeping the resulting
-  order. Absent ids stay in saved order even after reordering present tabs.
-- Moving 0 to 1 adds membership and selects it there; if it was host-active,
-  pane 0 selects its neighbor. Moving 1 to 0 removes membership and selects it
-  through the host binding; pane-1 selection moves to a neighbor when needed.
-- A neighbor is the next remaining tab after the source in effective order,
-  otherwise the previous remaining tab, otherwise ~''~. Moving the last present
-  tab out of either pane merges and selects the moved id. Moving to the current
-  pane is selection. Moves require effective split layout.
+  are no-ops. Dropping the last tab out of a source merges and selects the
+  dropped id, keeping the resulting order. Absent ids stay in saved order even
+  after reordering present tabs.
+- ~moveTo~ / ~moveToOther~ (the move button) put the tab away: it joins the
+  destination pane behind that pane's shown tab, which stays shown, in both
+  directions. Moving the last present tab out of either pane merges and keeps
+  showing the tab the destination pane was showing. Moving to the current pane
+  is selection. Moves require effective split layout.
+- When the shown tab leaves its pane, that pane shows the tab the user viewed
+  there most recently among the remaining ones (an in-memory history per pane
+  and entry key, learned only in controller actions), else its neighbor: the
+  next remaining tab after the source in effective order, otherwise the previous
+  remaining tab, otherwise ~''~.
 - Pane-0 select persists ~firstActive~ and invokes the host binding; pane-1
   select persists ~secondActive~. Selection must belong to its effective pane.
 - Whenever split or move calls ~active.set(id)~, it records ~firstActive = id~
   in the same intent update as the split/move, with one storage write, not two.
   Host navigation, size and tab-list changes never learn or overwrite it.
 - Explicit merge clears orientation, membership and both remembered selections,
-  keeping ratio and custom order. A last-tab move merges while recording the moved id as
-  ~firstActive~ in that same action; without split intent ~restoredActive~ is ~''~.
+  keeping ratio and custom order. A last-tab move or drop merges while recording the
+  tab it shows as ~firstActive~ in that same action; without split intent ~restoredActive~ is ~''~.
   Merge (including the required last-tab move merge) and LRU eviction are the
   only ways saved membership is forgotten; derived collapse never clears it.
 - ~setRatioLive~ is memory-only; ~commitRatio~ persists. Ratio denotes pane 0's
