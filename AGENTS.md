@@ -17,6 +17,9 @@ storage keys, routing, data, and themes.
   union present opened ids. All layout and restoration use visible ids, not present ids.
   `open` on an already-visible tab only focuses it in its own pane, NEVER moves it.
   Persist `opened` per entry like `order`, retaining absent ids. Derived changes never write.
+- `insert`/`insertSplit` require a present id and commit opening plus placement
+  in one write. Visible ids use `place`/`splitAt` semantics (not focus-only `open`).
+  An incoming hidden optional id can split off from one existing visible tab.
 - `replace(oldId, newId)` is one atomic action, never close + open/select writes.
   A hidden present target takes the visible source's order slot, opened state and
   pane membership, preserving the shown tab unless the source was shown. Remove
@@ -81,12 +84,19 @@ storage keys, routing, data, and themes.
 - Do not add domain navigation, routing, fetching, or application themes.
 - Pointer gestures use window listeners and clean up on up, cancel, and unmount.
   Tab dragging works in single and split layouts and cannot target another
-  SplitTabs root. Mouse uses a >6px threshold. Touch/pen must hold 350ms first;
+  SplitTabs root. Internal mouse drags use a >6px threshold. Internal touch/pen must hold 350ms first;
   movement >6px before arming cancels drag and allows native scrolling. Clean up
   hold timers too. When touch/pen arms, register a non-passive window touchmove
   handler that prevents default while armed; remove that exact handler on every
   exit/unmount. Never rely on pointermove.preventDefault or changing touch-action
   after touch start to stop native panning. Never use HTML5 drag-and-drop.
+- External drags use the SAME root drag instance, targets, ghost, listeners and
+  cleanup, exposed as `SplitTabs.startExternalDrag`. The host owns the threshold
+  or long press and hands over an already-armed pointer; never arm it again.
+  Absent ids may preview targets. On a valid drop only, the optional synchronous
+  `beforeDrop` hook registers the id in host tabs BEFORE `insert`/`insertSplit`.
+  Cancellation, foreign roots and invalid drops never call the hook. The host
+  owns source-row click suppression and any listeners used before handoff.
 - Share transient drag state through the root context. Show a cloned-content
   ghost, midpoint-based strip insertion marker, fitting-edge half-pane shade for
   a new split, or other-pane body shade plus end marker. No valid target means

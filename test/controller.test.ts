@@ -3,6 +3,125 @@ import { ref } from "vue";
 import { createSplitTabsController, type Orientation, type PaneIndex } from "../src/index";
 import { controller, storage } from "./helpers";
 
+// Insertion acceptance ledger: present-only guards, exact-slot reveal in either
+// pane, visible-id place/splitAt equivalence, four split edges, one-tab incoming
+// split eligibility, persistence, history and exactly one write per insertion.
+describe("controller insertion", () => {
+  it.each([0, 1] as const)("opens a hidden optional tab at a chosen slot in pane %i with one write", (pane) => {
+    const s = storage();
+    const c = controller({ optional: ["c"], storage: s });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    s.setItem.mockClear();
+    c.insert("c", pane, pane === 0 ? "d" : "b");
+    expect(c.panes.value.map((p) => p.tabs)).toEqual(pane === 0 ? [["a", "c", "d"], ["b"]] : [["a", "d"], ["c", "b"]]);
+    expect(c.panes.value.map((p) => p.active)).toEqual(pane === 0 ? ["c", "b"] : ["a", "c"]);
+    expect(c.opened.value).toEqual(["c"]);
+    expect(c.intent.value.second).toEqual(pane === 0 ? ["b"] : ["b", "c"]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+    c.dispose();
+    const loaded = controller({ optional: ["c"], storage: s });
+    loaded.setContainerSize(606, 406);
+    expect(loaded.panes.value.map((p) => p.tabs)).toEqual(c.panes.value.map((p) => p.tabs));
+    expect(loaded.opened.value).toEqual(["c"]);
+    loaded.dispose();
+  });
+
+  it("inserts at the end in single layout and learns primary history", () => {
+    const s = storage();
+    const c = controller({ optional: ["b"], storage: s });
+    c.select(0, "d");
+    s.setItem.mockClear();
+    c.insert("b", 0, null);
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a", "c", "d", "b"], active: "b" }]);
+    expect(c.intent.value.firstActive).toBe("b");
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+    c.close("b");
+    expect(c.panes.value[0]?.active).toBe("d");
+  });
+
+  it("shows a newly inserted pane-1 tab even when the host currently deep-links another tab there", () => {
+    const s = storage();
+    const value = ref("a");
+    const set = vi.fn((id: string) => { value.value = id; });
+    const c = controller({ optional: ["c"], storage: s, active: { get: () => value.value, set } });
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    value.value = "b";
+    s.setItem.mockClear();
+    c.insert("c", 1, null);
+    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
+    expect(c.intent.value.firstActive).toBe("a");
+    expect(set).toHaveBeenCalledExactlyOnceWith("a");
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("inserting an already-visible id has place semantics, not focus-only open semantics", () => {
+    const s = storage();
+    const c = controller({ storage: s });
+    c.insert("c", 0, "a");
+    expect(c.panes.value).toEqual([{ index: 0, tabs: ["c", "a", "b", "d"], active: "a" }]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+    c.setContainerSize(606, 406);
+    c.split("b", "cols");
+    s.setItem.mockClear();
+    c.insert("c", 1, "b");
+    expect(c.panes.value[1]).toEqual({ index: 1, tabs: ["c", "b"], active: "c" });
+    expect(c.opened.value).toEqual([]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["rows", "cols"] as const)("opens a hidden incoming id into either side of a %s split in one write", (o) => {
+    for (const side of ["start", "end"] as const) {
+      const s = storage();
+      const c = controller({ tabs: ["a", "b"], optional: ["b"], storage: s });
+      c.setContainerSize(606, 406);
+      c.commitRatio(0.7);
+      s.setItem.mockClear();
+      c.insertSplit("b", o, side);
+      expect(c.orientation.value).toBe(o);
+      expect(c.panes.value.map((p) => p.tabs)).toEqual(side === "start" ? [["b"], ["a"]] : [["a"], ["b"]]);
+      expect(c.panes.value.map((p) => p.active)).toEqual(side === "start" ? ["b", "a"] : ["a", "b"]);
+      expect(c.opened.value).toEqual(["b"]);
+      expect(c.intent.value.ratio).toBe(0.5);
+      expect(s.setItem).toHaveBeenCalledTimes(1);
+      c.dispose();
+    }
+  });
+
+  it("splits an already-visible incoming id like splitAt without duplicating it", () => {
+    const s = storage();
+    const c = controller({ storage: s });
+    c.setContainerSize(606, 406);
+    c.insertSplit("c", "cols", "start");
+    expect(c.panes.value.map((p) => p.tabs)).toEqual([["c"], ["a", "b", "d"]]);
+    expect(c.opened.value).toEqual([]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects absent ids, invalid slots/axes/sides and insufficient fits without opening or writing", () => {
+    const s = storage();
+    const c = controller({ optional: ["b"], storage: s });
+    c.insert("missing", 0, null);
+    c.insert("b", 1, null);
+    c.insert("b", 0, "b");
+    c.insert("b", 0, "missing");
+    c.insert("b", 3 as PaneIndex, null);
+    c.insertSplit("b", "cols", "end");
+    c.setContainerSize(606, 406);
+    c.insertSplit("missing", "cols", "end");
+    c.insertSplit("b", "bad" as Orientation, "end");
+    c.insertSplit("b", "cols", "bad" as "end");
+    expect(c.opened.value).toEqual([]);
+    expect(s.setItem).not.toHaveBeenCalled();
+    const empty = controller({ tabs: ["b"], optional: ["b"], storage: s });
+    empty.setContainerSize(606, 406);
+    empty.insertSplit("b", "rows", "end");
+    expect(empty.isSplit.value).toBe(false);
+    expect(s.setItem).not.toHaveBeenCalled();
+  });
+});
+
 // Acceptance ledger: on-demand visibility/counting, atomic placement/focus/close,
 // pane history and last-tab merges, per-entry persistence/legacy loading,
 // absent-id retention, reactive inputs without writes, and readonly exposure.

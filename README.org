@@ -180,6 +180,17 @@ Plain strip mode needs no controller or labels:
   are no-ops. Dropping the last tab out of a source merges and selects the
   dropped id, keeping the resulting order. Absent ids stay in saved order even
   after reordering present tabs.
+- ~insert(id, pane, beforeId)~ requires a present id and an effective destination
+  pane (pane 0 in single layout). For a visible id it behaves exactly like
+  ~place~, including pure same-pane reorder without selection and no duplicates.
+  For a hidden optional id it opens the tab at the requested slot, or pane end
+  for ~null~, and shows it there. Opening, membership, order and selection share
+  one intent write; invalid ids, panes or slot references do nothing.
+- ~insertSplit(id, orientation, side)~ requires a present id. Visible ids behave
+  exactly like ~splitAt~. A hidden optional id is opened into the chosen new
+  half-pane in the same write, with a centred ratio; the existing pane keeps its
+  shown tab. The incoming id plus one existing visible tab are enough to split.
+  Existing split layout, non-fitting axes and invalid ids/sides are no-ops.
 - ~moveTo~ / ~moveToOther~ (the move button) put the tab away: it joins the
   destination pane behind that pane's shown tab, which stays shown, in both
   directions. Moving the last visible tab out of either pane merges and keeps
@@ -412,6 +423,8 @@ so NodeNext support is not claimed. The bundler consumer probe runs in ~check~.
 | split | (id, orientation): void |
 | splitAt | (id, orientation, side: SplitSide): void |
 | place | (id, pane, beforeId: string or null): void |
+| insert | (id, pane, beforeId: string or null): void; open at a slot or place an existing tab |
+| insertSplit | (id, orientation, side: SplitSide): void; open in a new split or split an existing tab |
 | moveTo | (id, pane): void |
 | moveToOther | (id): void |
 | select | (pane, id): void |
@@ -455,6 +468,82 @@ Drag class hooks: ~split-tab-strip--draggable~, ~split-tab-strip-item--drag-arme
 for new splits; ~data-zone="pane"~ for an existing destination pane). The ghost is
 a body-mounted DOM clone, not a second mounted instance of host content; its
 theme variables are copied from the root at drag start.
+
+** External drag handoff
+
+An outside component (for example a sidebar) can address the intended root via
+its Vue component ref; it does not need to be a ~SplitTabs~ descendant. The
+root exposes:
+
+#+begin_src typescript
+startExternalDrag(
+  event: PointerEvent,
+  id: string,
+  ghost: ExternalTabGhost, // { label: string } or an HTMLElement to clone
+  labels: { rows: string; cols: string },
+  beforeDrop?: (target: TabDropTarget) => void,
+): void
+#+end_src
+
+~ExternalTabGhost~ and ~TabDropTarget~ are exported types. A drop target is
+either ~{ kind: 'place', pane, beforeId, marker, shade }~ or
+~{ kind: 'split', orientation, side, label, marker: null, shade }~. Marker and
+shade fields describe the same previews used by ordinary tab drags.
+
+The host applies its own mouse movement threshold or touch/pen long press,
+then hands over the current PointerEvent with the original pointer id. The
+library starts the ghost and previews immediately, with no second threshold or
+hold. Stop the host's gesture listeners at handoff; the root takes pointer
+capture and window listeners from there. The host remains responsible for
+suppressing a source-row click after its drag. For touch, the host must arrange
+its source's scrolling/long-press policy before handoff; the root prevents
+~touchmove~ after it takes over, not retroactively before touch arming.
+
+External drags share the root's one drag instance, ghost styling, midpoint
+markers, labelled half-pane edge shades, pane-body targets, and Escape/cancel/
+unmount cleanup. HTMLElement ghosts are cloned, never moved or mounted twice;
+their interactive descendants leave keyboard order in the clone. A busy root
+ignores another start. Another root, the end slot, and other invalid regions
+cannot accept the drop. An absent incoming id may preview all valid targets,
+including a new split next to a single visible tab.
+
+On a valid pointer-up, the root cleans up its gesture, calls ~beforeDrop(target)~
+if supplied, then calls ~controller.insert~ or ~controller.insertSplit~. The
+callback is synchronous: add the id to the host's reactive ~tabs~ there, BEFORE
+the controller action runs. The callback is never called on cancellation or an
+invalid drop. Do not return a Promise or wait for a fetch. Without a callback,
+the host must already have registered the id by the time it drops, otherwise
+insertion is a no-op. Register an incoming id as optional too if it should stay
+hidden during registration and be opened/shown atomically by insertion; a
+non-optional registered id is already visible and uses ~place~ semantics.
+
+For a controller constructed with the host's ~tabs~ and ~optional~ refs:
+
+#+begin_src vue
+<script setup lang="ts">
+import { ref } from 'vue';
+import { SplitTabs } from '@0k/vue-split-tabs';
+
+const splitView = ref<InstanceType<typeof SplitTabs> | null>(null);
+// Called by the host's gesture recognizer AFTER its threshold / long press.
+function handoffArmedPointer(event: PointerEvent, id: string, label: string) {
+  splitView.value?.startExternalDrag(event, id, { label }, labels, () => {
+    if (!tabs.value.includes(id)) {
+      optional.value.push(id);
+      tabs.value.push(id);
+    }
+  });
+}
+</script>
+<template>
+  <SplitTabs ref="splitView" :controller="controller"
+    :labels="{ divider: 'Resize panes' }" :strip-labels="labels" />
+</template>
+#+end_src
+
+The same root method forwards to the shared ~TabDrag.startExternal~ operation;
+there is no separate HTML5 or external drag system. Direct insertion methods
+are also available for hosts that already have their own target selection.
 
 * Theming
 

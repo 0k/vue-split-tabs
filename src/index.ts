@@ -4,6 +4,7 @@ export type {
   SplitTabsOptions, SplitTabsPane, SplitTabsStorage,
 } from "./controller.js";
 export type { SplitTabStripLabels, SplitTabStripProps } from "./context.js";
+export type { ExternalTabGhost, TabDropTarget } from "./drag.js";
 export { default as SplitTabs } from "./SplitTabs.vue";
 export { default as SplitTabStrip } from "./SplitTabStrip.vue";
 export { default as SplitTabsAnchor } from "./SplitTabsAnchor.vue";

@@ -57,6 +57,8 @@ export interface SplitTabsController {
   paneOf(id: string): PaneIndex | null;
   isOptional(id: string): boolean;
   open(id: string, pane: PaneIndex): void;
+  insert(id: string, pane: PaneIndex, beforeId: string | null): void;
+  insertSplit(id: string, orientation: Orientation, side: SplitSide): void;
   close(id: string): void;
   replace(oldId: string, newId: string): void;
   split(id: string, orientation: Orientation): void;
@@ -321,19 +323,25 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     if (!present.value.includes(id) || (pane !== 0 && pane !== 1)) return;
     const source = paneOf(id);
     if (source !== null) { select(source, id); return; }
-    const destination = isSplit.value ? pane : 0;
-    const tabs = panes.value.find((p) => p.index === destination)?.tabs ?? [];
+    insert(id, isSplit.value ? pane : 0, null);
+  }
+  function insert(id: string, pane: PaneIndex, beforeId: string | null): void {
+    if (!present.value.includes(id)) return;
+    if (paneOf(id) !== null) { place(id, pane, beforeId); return; }
+    const destination = panes.value.find((p) => p.index === pane);
+    if (destination === undefined || beforeId === id || (beforeId !== null && !destination.tabs.includes(beforeId))) return;
     visitShown();
     const next = {
       ...state.value,
-      opened: [...state.value.opened, id],
-      second: destination === 1 ? [...state.value.second.filter((tab) => tab !== id), id] : state.value.second.filter((tab) => tab !== id),
-      order: placementOrder(id, tabs, null),
+      opened: isOptional(id) ? [...state.value.opened, id] : state.value.opened,
+      second: pane === 1 ? [...state.value.second.filter((tab) => tab !== id), id] : state.value.second.filter((tab) => tab !== id),
+      order: placementOrder(id, destination.tabs, beforeId),
     };
-    if (destination === 0) next.firstActive = id;
-    else { next.secondActive = id; visit(1, id); }
+    const nextActive = pane === 0 ? id : second.value.includes(active.get()) ? shown(0) : null;
+    if (nextActive !== null) next.firstActive = nextActive;
+    if (pane === 1) { next.secondActive = id; visit(1, id); }
     update(next);
-    if (destination === 0) setActive(id);
+    if (nextActive !== null) setActive(nextActive);
   }
   function dismissal(id: string, pane: PaneIndex): { intent: SplitTabsIntent; active: string | null } {
     const top = shown(0);
@@ -480,22 +488,24 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     if (next.intent.orientation === null) liveRatio.value = null;
     if (next.active !== null) setActive(next.active);
   }
-  function applySplit(id: string, o: Orientation, side: SplitSide, ratio: number): void {
+  function applySplit(id: string, o: Orientation, side: SplitSide, ratio: number, inserting = false): void {
+    const hidden = inserting && present.value.includes(id) && !visible.value.includes(id);
     if (
       isSplit.value || (o !== "rows" && o !== "cols") || (side !== "start" && side !== "end")
-      || !fits.value[o] || visible.value.length < 2 || !visible.value.includes(id)
+      || !fits.value[o] || visible.value.length + (hidden ? 1 : 0) < 2 || (!visible.value.includes(id) && !hidden)
     ) return;
     const others = ordered.value.filter((tab) => tab !== id);
     const previous = active.get();
     visit(0, previous);
     const replacement = previousOf(0, id, ordered.value, others);
+    const next = { ...state.value, opened: hidden && isOptional(id) ? [...state.value.opened, id] : state.value.opened };
     if (side === "start") {
-      update({ ...state.value, orientation: o, ratio, firstActive: id, second: others, secondActive: others.includes(previous) ? previous : replacement });
+      update({ ...next, orientation: o, ratio, firstActive: id, second: others, secondActive: others.includes(previous) ? previous : replacement });
       setActive(id);
     } else {
       // The top pane keeps showing what the user saw, so record it over any older request.
       const nextActive = previous === id ? replacement : null;
-      update({ ...state.value, orientation: o, ratio, firstActive: nextActive ?? previous, second: [id], secondActive: id });
+      update({ ...next, orientation: o, ratio, firstActive: nextActive ?? previous, second: [id], secondActive: id });
       if (nextActive !== null) setActive(nextActive);
     }
     liveRatio.value = null;
@@ -509,7 +519,8 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
       ? state.value.firstActive : ""),
     canOfferSplit: computed(() => !isSplit.value && visible.value.length >= 2 && (fits.value.rows || fits.value.cols)),
     ratio: computed(() => clamp(liveRatio.value ?? state.value.ratio, true)),
-    paneOf, isOptional, open, close, replace, select, moveTo, merge, place,
+    paneOf, isOptional, open, insert, close, replace, select, moveTo, merge, place,
+    insertSplit(id, o, side) { applySplit(id, o, side, 0.5, true); },
     splitAt(id, o, side) { applySplit(id, o, side, 0.5); },
     moveToOther(id) { const pane = paneOf(id); if (pane !== null) moveTo(id, pane === 0 ? 1 : 0); },
     split(id, o) { applySplit(id, o, "end", state.value.ratio); },

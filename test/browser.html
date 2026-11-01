@@ -8,10 +8,12 @@
   <style>
     html, body { margin: 0; }
     #host { width: 600px; height: 400px; }
+    #external-row { position: fixed; left: 650px; top: 80px; }
   </style>
 </head>
 <body>
 <div id="host"></div>
+<button id="external-row" type="button">External item</button>
 <script type="module">
   import { createApp, h, ref } from "vue";
   import { createSplitTabsController, SplitTabs, SplitTabStrip, SplitTabsKeep } from "/dist/index.js";
@@ -30,6 +32,28 @@
     minPaneWidth: 100, minPaneHeight: 80,
   });
   window.controller = controller;
+  const view = ref(null);
+  let externalCount = 0;
+  document.querySelector("#external-row").addEventListener("pointerdown", down => {
+    if (down.button !== 0) return;
+    const id = `external-${++externalCount}`;
+    function stop() {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+    }
+    function move(event) {
+      if (event.pointerId !== down.pointerId || Math.hypot(event.clientX - down.clientX, event.clientY - down.clientY) <= 6) return;
+      stop();
+      view.value.startExternalDrag(event, id, { label: "External item" }, labels, () => {
+        optional.value.push(id);
+        tabs.value.push(id);
+      });
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  });
   window.pointerLog = [];
   window.sawGhost = false;
   new MutationObserver(records => {
@@ -41,7 +65,7 @@
   }
   createApp({
     render: () => h(SplitTabs, {
-      controller, labels: { divider: "Resize" },
+      ref: view, controller, labels: { divider: "Resize" },
       stripLabels: labels,
     }, {
       ...(end.value ? { pane: ({ pane }) => h(SplitTabStrip, {

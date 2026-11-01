@@ -44,6 +44,40 @@ async function touchEnd(page, cdp) {
 
 const order = page => page.evaluate(() => [...window.controller.panes.value[0].tabs]);
 const cases = [
+  ["external sidebar handoff inserts at a strip slot and splits at the right edge", async page => {
+    const row = page.locator("#external-row");
+    assert.equal(await row.evaluate(el => el.closest(".split-tabs")), null);
+    const start = await center(row);
+    const tab = await page.locator('[data-split-tabs-tab="tab-b"]').boundingBox();
+    assert.ok(tab);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x - 3, start.y);
+    assert.equal(await page.locator(".split-tabs-drag-ghost").count(), 0, "host owns the threshold");
+    await page.mouse.move(tab.x + 3, tab.y + tab.height / 2, { steps: 12 });
+    await page.waitForSelector('.split-tab-strip-marker[data-before="tab-b"]');
+    assert.equal(await page.locator(".split-tabs-drag-ghost").textContent(), "External item");
+    assert.equal(await page.evaluate(() => window.controller.paneOf("external-1")), null, "id remains absent during preview");
+    await page.mouse.up();
+    await page.waitForSelector('[data-split-tabs-tab="external-1"]');
+    assert.deepEqual((await order(page)).slice(0, 3), ["tab-a", "external-1", "tab-b"]);
+    assert.equal(await page.evaluate(() => window.controller.panes.value[0].active), "external-1");
+    const root = await page.locator(".split-tabs").boundingBox();
+    assert.ok(root);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(root.x + root.width - 10, root.y + root.height / 2, { steps: 12 });
+    const shade = page.locator('.split-tabs-drop-shade[data-orientation="cols"][data-side="end"]');
+    await shade.waitFor();
+    assert.equal(await shade.textContent(), "Cols");
+    await page.mouse.up();
+    await page.waitForFunction(() => window.controller.orientation.value === "cols");
+    assert.deepEqual(await page.evaluate(() => [...window.controller.panes.value[1].tabs]), ["external-2"]);
+    assert.equal(await page.evaluate(() => window.controller.panes.value[1].active), "external-2");
+    assert.equal(await page.locator(".split-tabs-drag-ghost").count(), 0);
+    assert.equal(await page.locator(".split-tab-strip-marker").count(), 0);
+    assert.equal(await page.locator(".split-tabs-drop-shade").count(), 0);
+  }],
   ["disabled split buttons preserve labelled touch edge-split, cross-pane drop and keyboard reorder", async (page, context) => {
     await page.evaluate(() => {
       window.fixture.end.value = true;

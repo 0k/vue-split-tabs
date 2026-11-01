@@ -6,11 +6,14 @@ interface Marker { left: number; top: number; height: number }
 interface PlaceTarget { kind: "place"; pane: PaneIndex; beforeId: string | null; marker: Marker | null; shade: PreviewRect | null }
 interface SplitTarget { kind: "split"; orientation: Orientation; side: SplitSide; marker: null; shade: PreviewRect; label: string }
 export type TabDropTarget = PlaceTarget | SplitTarget;
+export type ExternalTabGhost = { label: string } | HTMLElement;
 export interface TabDrag {
   id: Ref<string | null>;
   armed: Ref<string | null>;
   target: ShallowRef<TabDropTarget | null>;
   start(event: PointerEvent, id: string, owner: HTMLElement, labels?: { rows: string; cols: string }): void;
+  startExternal(event: PointerEvent, id: string, ghost: ExternalTabGhost, labels: { rows: string; cols: string },
+    beforeDrop?: (target: TabDropTarget) => void): void;
   consumeClick(id: string, event: MouseEvent): boolean;
   cancelOwner(owner: HTMLElement | null): void;
   dispose(): void;
@@ -19,6 +22,9 @@ interface Source {
   id: string; owner: HTMLElement; button: HTMLElement; touchLike: boolean;
   pointerId: number; x: number; y: number;
   labels: { rows: string; cols: string } | undefined;
+  external: boolean;
+  ghost?: ExternalTabGhost;
+  beforeDrop?: (target: TabDropTarget) => void;
 }
 
 export function previewStyle(rect: PreviewRect): Record<string, string> {
@@ -101,7 +107,8 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
       const end = insertion(pane.querySelector<HTMLElement>(".split-tab-strip"), paneIndex, null);
       target.value = { ...end, shade: paneRect(pane) };
     } else {
-      if (!controller.canOfferSplit.value || source.labels === undefined) return;
+      const incoming = source.external && controller.paneOf(source.id) === null && (controller.panes.value[0]?.tabs.length ?? 0) > 0;
+      if ((!controller.canOfferSplit.value && !incoming) || source.labels === undefined) return;
       const r = pane.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return;
       const x = (event.clientX - r.left) / r.width;
@@ -137,6 +144,26 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
       highlight.classList.add("split-tabs-pane--drop-target");
     }
   }
+  function beginDrag(): void {
+    if (source === null) return;
+    id.value = source.id;
+    ghost = document.createElement("div");
+    ghost.className = "split-tabs-drag-ghost";
+    ghost.setAttribute("aria-hidden", "true");
+    const theme = root.value === null ? null : getComputedStyle(root.value);
+    for (const variable of [
+      "--split-tabs-ghost-background", "--split-tabs-ghost-color", "--split-tabs-ghost-opacity",
+      "--split-tabs-ghost-shadow", "--split-tabs-ghost-z-index", "--split-tabs-button-padding",
+    ]) {
+      const value = theme?.getPropertyValue(variable);
+      if (value) ghost.style.setProperty(variable, value);
+    }
+    if (source.ghost instanceof HTMLElement) ghost.appendChild(source.ghost.cloneNode(true));
+    else if (source.ghost !== undefined) ghost.textContent = source.ghost.label;
+    else for (const child of source.button.childNodes) ghost.appendChild(child.cloneNode(true));
+    for (const child of ghost.querySelectorAll<HTMLElement>("a,button,input,select,textarea,[tabindex]")) child.tabIndex = -1;
+    document.body.appendChild(ghost);
+  }
   function move(event: PointerEvent): void {
     if (source === null || event.pointerId !== source.pointerId) return;
     const distance = Math.hypot(event.clientX - source.x, event.clientY - source.y);
@@ -145,29 +172,13 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
       return;
     }
     if (id.value === null && distance <= 6) return;
-    if (id.value === null) {
-      id.value = source.id;
-      ghost = document.createElement("div");
-      ghost.className = "split-tabs-drag-ghost";
-      ghost.setAttribute("aria-hidden", "true");
-      const theme = root.value === null ? null : getComputedStyle(root.value);
-      for (const variable of [
-        "--split-tabs-ghost-background", "--split-tabs-ghost-color", "--split-tabs-ghost-opacity",
-        "--split-tabs-ghost-shadow", "--split-tabs-ghost-z-index", "--split-tabs-button-padding",
-      ]) {
-        const value = theme?.getPropertyValue(variable);
-        if (value) ghost.style.setProperty(variable, value);
-      }
-      for (const child of source.button.childNodes) ghost.appendChild(child.cloneNode(true));
-      for (const child of ghost.querySelectorAll<HTMLElement>("a,button,input,select,textarea,[tabindex]")) child.tabIndex = -1;
-      document.body.appendChild(ghost);
-    }
+    if (id.value === null) beginDrag();
     event.preventDefault();
     if (ghost !== null) { ghost.style.left = `${event.clientX}px`; ghost.style.top = `${event.clientY}px`; }
     findTarget(event);
   }
   function cleanup(): void {
-    if (id.value !== null && source?.touchLike === false) {
+    if (id.value !== null && source?.touchLike === false && !source.external) {
       clearSuppression();
       suppressed = id.value;
       suppressTimer = setTimeout(() => {
@@ -198,13 +209,25 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     if (id.value !== null) findTarget(event);
     const tab = id.value;
     const drop = target.value;
+    const external = source.external;
+    const beforeDrop = source.beforeDrop;
     cleanup();
     if (tab === null || drop === null) return;
-    if (drop.kind === "place") controller.place(tab, drop.pane, drop.beforeId);
+    if (external) {
+      beforeDrop?.(drop);
+      if (drop.kind === "place") controller.insert(tab, drop.pane, drop.beforeId);
+      else controller.insertSplit(tab, drop.orientation, drop.side);
+    } else if (drop.kind === "place") controller.place(tab, drop.pane, drop.beforeId);
     else controller.splitAt(tab, drop.orientation, drop.side);
   }
   function cancel(event: PointerEvent): void { if (event.pointerId === source?.pointerId) cleanup(); }
   function keydown(event: KeyboardEvent): void { if (event.key === "Escape") cleanup(); }
+  function listen(): void {
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", keydown);
+  }
   return {
     id, armed, target,
     start(event, tab, owner, labels) {
@@ -218,14 +241,25 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
       const touchLike = event.pointerType === "touch" || event.pointerType === "pen";
       source = {
         id: tab, owner, button: event.currentTarget, pointerId: event.pointerId,
-        x: event.clientX, y: event.clientY, labels, touchLike,
+        x: event.clientX, y: event.clientY, labels, touchLike, external: false,
       };
       if (touchLike) holdTimer = setTimeout(arm, 350);
       else arm();
-      window.addEventListener("pointermove", move, { passive: false });
-      window.addEventListener("pointerup", end);
-      window.addEventListener("pointercancel", cancel);
-      window.addEventListener("keydown", keydown);
+      listen();
+    },
+    startExternal(event, tab, ghostContent, labels, beforeDrop) {
+      if (source !== null || root.value === null) return;
+      clearSuppression();
+      source = {
+        id: tab, owner: root.value, button: event.currentTarget instanceof HTMLElement ? event.currentTarget : root.value,
+        pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+        labels, touchLike: event.pointerType === "touch" || event.pointerType === "pen", external: true,
+        ghost: ghostContent, ...(beforeDrop === undefined ? {} : { beforeDrop }),
+      };
+      arm();
+      beginDrag();
+      listen();
+      move(event);
     },
     consumeClick(tab, event) {
       if (!(event.detail > 0)) return false;

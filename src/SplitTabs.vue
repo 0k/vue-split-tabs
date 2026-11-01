@@ -12,6 +12,7 @@ const c = props.controller;
 const root = ref<HTMLElement | null>(null);
 const resizing = ref(false);
 const drag = createTabDrag(c, root);
+defineExpose({ startExternalDrag: drag.startExternal });
 provide(splitTabsKey, { controller: c, root, anchors: shallowReactive(new Map<string, HTMLElement>()), drag });
 const basis = computed(() => c.isSplit.value ? `calc((100% - ${c.dividerSize}px) * ${c.ratio.value})` : "100%");
 let observer: ResizeObserver | undefined;
