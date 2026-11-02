@@ -13,7 +13,7 @@ function fixture(split = false, tabs: readonly string[] = ["a", "b", "c", "d"]) 
   const wrapper = mount(SplitTabs, { attachTo: document.body,
     props: { controller: c, labels: { divider: "Resize" }, stripLabels: labels },
     slots: { pane: ({ pane }: { pane: SplitTabsPane }) => [
-      h(SplitTabStrip, { controller: c, pane: pane.index, labels, alwaysShow: true }, { tab: ({ id }: { id: string }) => h("em", `Label ${id}`) }),
+      h(SplitTabStrip, { controller: c, pane: pane.id, labels, alwaysShow: true }, { tab: ({ id }: { id: string }) => h("em", `Label ${id}`) }),
       h("div", { class: "body" }, "Content"),
     ] },
   });
@@ -43,8 +43,10 @@ describe("external drag handoff", () => {
     sidebar.textContent = "Incoming";
     document.body.appendChild(sidebar);
     sidebar.addEventListener("pointermove", (event) => {
-      const start = wrapper.vm.startExternalDrag;
-      if (typeof start !== "function") throw new Error("SplitTabs must expose startExternalDrag");
+      const start: unknown = Reflect.get(wrapper.vm, "startExternalDrag");
+      if (typeof start !== "function") {
+        throw new Error("SplitTabs must expose startExternalDrag");
+      }
       start(event, id, { label: "Incoming" }, labels, beforeDrop);
     }, { once: true });
     pointer(sidebar, "pointermove", { clientX: 170, clientY: 15 });
@@ -61,8 +63,8 @@ describe("external drag handoff", () => {
     expect(wrapper.get(".split-tab-strip-marker").attributes("data-before")).toBe("c");
     expect(drop).not.toHaveBeenCalled();
     pointer(window, "pointerup", { clientX: 170, clientY: 15 });
-    expect(drop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: "place", pane: 0, beforeId: "c" }));
-    expect(insert).toHaveBeenCalledExactlyOnceWith("incoming", 0, "c");
+    expect(drop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: "place", pane: c.panes.value[0]!.id, beforeId: "c" }));
+    expect(insert).toHaveBeenCalledExactlyOnceWith("incoming", c.panes.value[0]!.id, "c", expect.any(Function));
     expect(s.setItem).not.toHaveBeenCalled();
     expect(document.querySelector(".split-tabs-drag-ghost")).toBeNull();
   });
@@ -96,7 +98,7 @@ describe("external drag handoff", () => {
     expect(wrapper.get(".split-tabs-drop-shade").attributes("data-side")).toBe("end");
     expect(wrapper.get(".split-tabs-drop-shade").text()).toBe(labels.cols);
     pointer(window, "pointerup", { clientX: 590, clientY: 200 });
-    expect(insert).toHaveBeenCalledExactlyOnceWith("incoming", "cols", "end");
+    expect(insert).toHaveBeenCalledExactlyOnceWith("incoming", "cols", "end", c.panes.value[0]!.id);
   });
 
   it.each([0, 1] as const)("offers pane %i's body for an id that is not yet in any pane", async (pane) => {
@@ -319,7 +321,7 @@ describe("visual drops", () => {
     const { c, s, wrapper, hit, start } = fixture(true);
     hit.mockReturnValue(wrapper.get("[data-split-tabs-pane='0'] .body").element);
     start();
-    pointer(window, "pointermove", { clientX: 200, clientY: 200 });
+    pointer(window, "pointermove", { clientX: 150, clientY: 200 });
     await nextTick();
     expect(wrapper.find(".split-tabs-drop-shade").exists()).toBe(false);
     hit.mockReturnValue(wrapper.get("[data-split-tabs-pane='1'] .body").element);

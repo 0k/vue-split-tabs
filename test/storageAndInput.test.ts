@@ -241,7 +241,7 @@ describe("pointer arming and button interaction", () => {
     pointer(window, "pointermove", { clientX: 250 });
     pointer(window, "pointerup", { clientX: 250 });
     button?.element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 }));
-    expect(select).toHaveBeenCalledExactlyOnceWith(0, "b");
+    expect(select).toHaveBeenCalledExactlyOnceWith(c.panes.value[0]!.id, "b");
     button?.element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
     expect(select).toHaveBeenCalledTimes(1);
     button?.element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
@@ -258,7 +258,7 @@ describe("pointer arming and button interaction", () => {
     pointer(window, "pointerup", { clientX: 250 });
     vi.advanceTimersByTime(0);
     button?.element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-    expect(select).toHaveBeenCalledExactlyOnceWith(0, "b");
+    expect(select).toHaveBeenCalledExactlyOnceWith(c.panes.value[0]!.id, "b");
   });
 
   it("unmount clears the pending post-mouse-drag suppression timer", () => {

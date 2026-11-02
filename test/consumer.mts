@@ -1,6 +1,6 @@
 import {
   createSplitTabsController, SplitTabs, SplitTabStrip, SplitTabsKeep, SplitTabsAnchor,
-  type SplitTabsIntent, type SplitSide, type ExternalTabGhost, type TabDropTarget,
+  type SplitTabsIntent, type SplitSide, type ExternalTabGhost, type TabDropTarget, type EffectiveCut,
 } from "@0k/vue-split-tabs";
 
 const controller = createSplitTabsController({
@@ -8,10 +8,13 @@ const controller = createSplitTabsController({
   minPaneWidth: 100, minPaneHeight: 80,
 });
 const side: SplitSide = "start";
-controller.place("b", 0, "a");
+const pane = controller.panes.value[0]!.id;
+controller.place("b", pane, "a");
 controller.splitAt("a", "rows", side);
-controller.insert("b", 0, null);
+controller.insert("b", pane, null);
 controller.insertSplit("b", "cols", side);
+controller.insert("b", pane, null, () => undefined);
+controller.insertSplit("b", "cols", side, pane, () => undefined);
 const ghost: ExternalTabGhost = { label: "External" };
 function external(view: InstanceType<typeof SplitTabs>, event: PointerEvent) {
   view.startExternalDrag(event, "incoming", ghost, { rows: "Rows", cols: "Cols" }, (target: TabDropTarget) => {
@@ -20,5 +23,6 @@ function external(view: InstanceType<typeof SplitTabs>, event: PointerEvent) {
 }
 const order: readonly string[] = controller.intent.value.order;
 const ratio: SplitTabsIntent["ratio"] = controller.ratio.value;
-void [SplitTabs, SplitTabStrip, SplitTabsKeep, SplitTabsAnchor, order, ratio, external];
+const cuts: ReadonlyMap<string, EffectiveCut> = controller.cuts.value;
+void [SplitTabs, SplitTabStrip, SplitTabsKeep, SplitTabsAnchor, order, ratio, external, cuts];
 controller.dispose();

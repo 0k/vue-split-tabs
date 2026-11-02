@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
-import { createSplitTabsController, type Orientation, type PaneIndex } from "../src/index";
-import { controller, storage } from "./helpers";
+import { createSplitTabsController, type Orientation } from "../src/index";
+import { controller, storage, type PaneIndex } from "./helpers";
 
 // Insertion acceptance ledger: present-only guards, exact-slot reveal in either
 // pane, visible-id place/splitAt equivalence, four split edges, one-tab incoming
@@ -185,7 +185,7 @@ describe("on-demand tabs", () => {
     c.open("c", 0);
     expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
     expect(c.intent.value.second).toEqual(membership);
-    expect(c.paneOf("c")).toBe(1);
+    expect(c.paneOf("c")).toBe(c.panes.value[1]?.id);
     expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
     c.open("a", 1);
     expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
@@ -350,7 +350,7 @@ describe("controller replace", () => {
     c.replace("new", "chosen");
     expect(c.intent.value.order).toEqual(order);
     expect(c.panes.value[pane]?.tabs).toEqual(pane === 0 ? ["a", "chosen", "c"] : ["b", "chosen"]);
-    expect(c.paneOf("chosen")).toBe(pane);
+    expect(c.paneOf("chosen")).toBe(c.panes.value[pane]?.id);
     expect(c.paneOf("new")).toBeNull();
     expect(c.panes.value.map((p) => p.active)).toEqual(pane === 0 ? ["chosen", "b"] : ["a", "chosen"]);
     expect(c.intent.value.second).toEqual(pane === 0 ? ["b"] : ["b", "chosen"]);
@@ -369,7 +369,7 @@ describe("controller replace", () => {
     s.setItem.mockClear();
     c.replace("new", "chosen");
     expect(c.panes.value.map((p) => p.active)).toEqual(shown);
-    expect(c.paneOf("chosen")).toBe(pane);
+    expect(c.paneOf("chosen")).toBe(c.panes.value[pane]?.id);
     expect(c.opened.value).toEqual(["chosen"]);
     expect(s.setItem).toHaveBeenCalledTimes(1);
   });
@@ -389,7 +389,7 @@ describe("controller replace", () => {
     expect(c.intent.value.order).toEqual(order);
     expect(c.intent.value.second).toEqual(["b"]);
     expect(c.opened.value).toEqual([]);
-    expect(c.paneOf(newId)).toBe(pane);
+    expect(c.paneOf(newId)).toBe(c.panes.value[pane]?.id);
     expect(s.setItem).toHaveBeenCalledTimes(1);
   });
 
@@ -407,7 +407,7 @@ describe("controller replace", () => {
     s.setItem.mockClear();
     c.replace("new", newId);
     expect(c.panes.value.map((p) => p.active)).toEqual(["c", "d"]);
-    expect(c.paneOf(newId)).toBe(pane === 0 ? 1 : 0);
+    expect(c.paneOf(newId)).toBe(c.panes.value[pane === 0 ? 1 : 0]?.id);
     expect(c.intent.value.second).toEqual(membership);
     expect(c.intent.value.order).toEqual(order);
     expect(c.paneOf("new")).toBeNull();
@@ -461,7 +461,7 @@ describe("controller replace", () => {
     s.setItem.mockClear();
     c.replace("new", "chosen");
     expect(c.panes.value.map((p) => p.active)).toEqual(["a", "chosen"]);
-    expect(c.paneOf("chosen")).toBe(1);
+    expect(c.paneOf("chosen")).toBe(c.panes.value[1]?.id);
     expect(c.paneOf("new")).toBeNull();
     expect(set).toHaveBeenCalledExactlyOnceWith("a");
     expect(s.setItem).toHaveBeenCalledTimes(1);
@@ -858,7 +858,7 @@ describe("controller restoration", () => {
     expect(c.intent.value.firstActive).toBe("c");
     expect(s.setItem).toHaveBeenCalledTimes(1);
     expect(JSON.parse(s.setItem.mock.calls[0]?.[1] ?? "null")).toEqual({ entries: [{ key: "page", stamp: 1, intent: {
-      orientation: null, firstActive: "c", order: [], opened: [], second: [], secondActive: "", ratio: 0.5,
+      tree: { kind: "pane", id: "pane-0", tabs: [], active: "c" }, firstActive: "c", order: [], opened: [], ratio: 0.5,
     } }] });
     expect(c.restoredActive.value).toBe("");
     c.setContainerSize(606, 406);

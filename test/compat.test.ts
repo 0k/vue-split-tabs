@@ -20,6 +20,19 @@ function declarations(css: string, selector: string): string {
     .map((match) => match[2]).join("\n");
 }
 describe("compatibility and packaging", () => {
+  it("documents recursive pane ids, subtree sizing and equalization without obsolete two-pane rules", () => {
+    const agents = readFileSync("AGENTS.md", "utf8");
+    for (const rule of ["unlimited-depth binary tree", "Public pane arguments", "Every pane body offers fitting edge thirds",
+      "Derive collapse top-down", "Divider clamps use full subtree minimums", "equalize the maximal connected same-axis cut run"]) {
+      expect(agents, `Expected durable recursive rule: ${rule}`).toContain(rule);
+    }
+    expect(agents).not.toMatch(/pane[- ]?[01]\b|both panes|single-layout split controls|sendToOther|centre via/);
+    const docs = readFileSync("README.org", "utf8");
+    for (const api of ["Breaking changes from 0.1.x", "pane.id", "intent.tree", "equalize(cutId)", "pane.fits"]) {
+      expect(docs, `Expected recursive API documentation: ${api}`).toContain(api);
+    }
+  });
+
   it("Pandoc-rendered README preserves every stylesheet variable's double hyphen", (context) => {
     const docs = readFileSync("README.org", "utf8");
     const autogen = readFileSync(".package.d/autogen.d/20-org-to-md.sh", "utf8");

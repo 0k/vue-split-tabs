@@ -105,7 +105,7 @@ const cases = [
     await page.mouse.move(point.x, point.y, { steps: 8 });
     await page.waitForSelector('[data-split-tabs-pane="1"].split-tabs-pane--drop-target');
     await page.mouse.up();
-    assert.equal(await page.evaluate(() => window.controller.paneOf("tab-b")), 1);
+    assert.equal(await page.evaluate(() => window.controller.paneOf("tab-b")), "pane-1");
     assert.equal(await page.evaluate(() => window.controller.panes.value[1].active), "tab-b");
     const button = page.locator('[data-split-tabs-tab="tab-c"] .split-tab-strip-tab');
     await button.focus();
@@ -142,7 +142,7 @@ const cases = [
     assert.equal(await page.locator(".split-tab-strip-end").count(), 2);
     await page.locator('[data-split-tabs-pane="0"] .split-tab-strip-end button').click();
     assert.deepEqual(await page.evaluate(() => window.controller.panes.value.map(p => p.active)), ["tab-a", "tab-l"]);
-    assert.equal(await page.evaluate(() => window.controller.paneOf("tab-l")), 1);
+    assert.equal(await page.evaluate(() => window.controller.paneOf("tab-l")), "pane-1");
     const close = page.locator(".split-tab-strip-close");
     const geometry = await close.evaluate(el => {
       const r = el.getBoundingClientRect();
@@ -174,9 +174,10 @@ const cases = [
     await page.evaluate(() => {
       window.fixture.optional.value = ["tab-b"];
       window.fixture.end.value = true;
-      window.controller.open("tab-b", 0);
-      window.controller.place("tab-b", 0, "tab-c");
-      window.controller.select(0, "tab-a");
+      const pane = window.controller.panes.value[0].id;
+      window.controller.open("tab-b", pane);
+      window.controller.place("tab-b", pane, "tab-c");
+      window.controller.select(pane, "tab-a");
     });
     const close = page.locator(".split-tab-strip-close");
     const styles = () => close.evaluate(el => ({
@@ -221,7 +222,7 @@ const cases = [
     assert.ok(!log.includes("pointercancel:touch"), JSON.stringify(log));
     assert.notDeepEqual(await order(page), before);
     assert.deepEqual((await order(page)).slice(0, 4), ["tab-a", "tab-c", "tab-b", "tab-d"]);
-    await page.evaluate(() => window.controller.select(0, "tab-a"));
+    await page.evaluate(() => window.controller.select(window.controller.panes.value[0].id, "tab-a"));
     const button = page.locator('[data-split-tabs-tab="tab-b"] .split-tab-strip-tab');
     await button.focus();
     await page.keyboard.press("Enter");
@@ -320,12 +321,12 @@ const cases = [
       }
       if (variant === "reorder") assert.equal((await order(page))[0], "tab-c");
       if (variant === "cross-pane" || variant === "edge-split") {
-        assert.equal(await page.evaluate(() => window.controller.paneOf("tab-c")), 1);
+        assert.equal(await page.evaluate(() => window.controller.paneOf("tab-c")), "pane-1");
       }
       await page.evaluate(() => {
         const c = window.controller;
         const pane = c.paneOf("tab-c");
-        const other = c.panes.value[pane].tabs.find(id => id !== "tab-c");
+        const other = c.panes.value.find(p => p.id === pane).tabs.find(id => id !== "tab-c");
         if (other) c.select(pane, other);
         window.keyboardSelections = [];
         const select = c.select;
@@ -385,7 +386,16 @@ try {
       });
       await page.goto("http://split-tabs.test/");
       await page.waitForSelector(".split-tab-strip-tab");
-      await page.waitForFunction(() => window.controller.canOfferSplit.value);
+      try {
+        await page.waitForFunction(() => window.controller.canOfferSplit.value);
+      } catch (cause) {
+        const observed = await page.evaluate(() => ({
+          fits: window.controller.fits.value, panes: window.controller.panes.value,
+          resizeLog: window.resizeLog,
+          root: document.querySelector(".split-tabs").getBoundingClientRect().toJSON(),
+        }));
+        throw new Error(`Expected measured split-ready fixture; observed ${JSON.stringify({ ...observed, errors })}`, { cause });
+      }
       assert.equal(await page.locator(".split-tab-strip-tab--active").count(), 1);
       assert.equal(await page.locator(".split-tab-strip-tab.active").count(), 0);
       await test(page, context);

@@ -1,5 +1,5 @@
 import type { InjectionKey, Ref } from "vue";
-import type { PaneIndex, SplitTabsController } from "./controller.js";
+import type { PaneId, SplitTabsController } from "./controller.js";
 import type { TabDrag } from "./drag.js";
 
 export interface SplitTabsContext {
@@ -9,8 +9,8 @@ export interface SplitTabsContext {
   drag: TabDrag;
 }
 export const splitTabsKey: InjectionKey<SplitTabsContext> = Symbol("split-tabs");
-export const paneKey: InjectionKey<PaneIndex> = Symbol("split-tabs-pane");
-export interface SplitTabStripLabels { rows: string; cols: string; sendToOther: string; close?: string }
+export const paneKey: InjectionKey<PaneId> = Symbol("split-tabs-pane");
+export interface SplitTabStripLabels { rows: string; cols: string; close?: string }
 interface StripHooks {
   alwaysShow?: boolean;
   splitButtons?: boolean;
@@ -19,7 +19,7 @@ interface StripHooks {
 }
 export type SplitTabStripProps = StripHooks & ({
   controller: SplitTabsController;
-  pane: PaneIndex;
+  pane: PaneId;
   labels: SplitTabStripLabels;
   tabs?: never;
   active?: never;

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ref } from "vue";
-import type { Orientation, PaneIndex } from "../src/index";
-import { controller, storage } from "./helpers";
+import type { Orientation } from "../src/index";
+import { controller, storage, type PaneIndex } from "./helpers";
 
 describe("free ordering", () => {
   it("place reorders a single pane in one write without selecting, and reloads per entry", () => {
@@ -151,6 +151,8 @@ describe("free ordering", () => {
     expect(c.panes.value.map((p) => p.active)).toEqual(["a", "b"]);
     expect(c.restoredActive.value).toBe("a");
     c.splitAt("b", "rows", "end");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
+    // S4 replaces the old single-split guard: the remaining pane can split again.
+    expect(c.panes.value).toHaveLength(3);
+    expect(s.setItem).toHaveBeenCalledTimes(2);
   });
 });

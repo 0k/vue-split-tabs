@@ -1,10 +1,10 @@
 import { ref, shallowRef, type Ref, type ShallowRef } from "vue";
-import type { Orientation, PaneIndex, SplitSide, SplitTabsController } from "./controller.js";
+import type { Orientation, PaneId, SplitSide, SplitTabsController } from "./controller.js";
 
 interface PreviewRect { left: number; top: number; width: number; height: number }
 interface Marker { left: number; top: number; height: number }
-interface PlaceTarget { kind: "place"; pane: PaneIndex; beforeId: string | null; marker: Marker | null; shade: PreviewRect | null }
-interface SplitTarget { kind: "split"; orientation: Orientation; side: SplitSide; marker: null; shade: PreviewRect; label: string }
+interface PlaceTarget { kind: "place"; pane: PaneId; beforeId: string | null; marker: Marker | null; shade: PreviewRect | null }
+interface SplitTarget { kind: "split"; pane: PaneId; orientation: Orientation; side: SplitSide; marker: null; shade: PreviewRect; label: string }
 export type TabDropTarget = PlaceTarget | SplitTarget;
 export type ExternalTabGhost = { label: string } | HTMLElement;
 export interface TabDrag {
@@ -69,7 +69,7 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     const host = root.value?.getBoundingClientRect();
     return { left: bounds.left - (host?.left ?? 0), top: bounds.top - (host?.top ?? 0), width: bounds.width, height: bounds.height };
   }
-  function insertion(strip: HTMLElement | null, pane: PaneIndex, x: number | null): PlaceTarget {
+  function insertion(strip: HTMLElement | null, pane: PaneId, x: number | null): PlaceTarget {
     if (strip === null) return { kind: "place", pane, beforeId: null, marker: null, shade: null };
     const items = [...strip.querySelectorAll<HTMLElement>(".split-tab-strip-item")].filter((item) => item.closest(".split-tab-strip") === strip);
     const before = x === null ? undefined : items.find((item) => { const r = item.getBoundingClientRect(); return x < r.left + r.width / 2; });
@@ -96,45 +96,51 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     if (hit === null || hit.closest(".split-tabs") !== host) return;
     if (hit.closest(".split-tab-strip-end") !== null) return;
     const pane = hit.closest<HTMLElement>("[data-split-tabs-pane]");
-    const index = pane?.dataset.splitTabsPane;
-    if (pane === null || (index !== "0" && index !== "1")) return;
-    const paneIndex: PaneIndex = index === "0" ? 0 : 1;
+    const index = pane?.dataset.paneId;
+    if (pane === null || index === undefined) return;
+    const current = controller.panes.value.find(p => p.id === index);
+    if (current === undefined) return;
+    const paneIndex = current.id;
     const strip = hit.closest<HTMLElement>(".split-tab-strip");
     if (strip !== null) {
       target.value = insertion(strip, paneIndex, event.clientX);
-    } else if (controller.isSplit.value) {
-      if (paneIndex === controller.paneOf(source.id)) return;
-      const end = insertion(pane.querySelector<HTMLElement>(".split-tab-strip"), paneIndex, null);
-      target.value = { ...end, shade: paneRect(pane) };
     } else {
-      const incoming = source.external && controller.paneOf(source.id) === null && (controller.panes.value[0]?.tabs.length ?? 0) > 0;
-      if ((!controller.canOfferSplit.value && !incoming) || source.labels === undefined) return;
       const r = pane.getBoundingClientRect();
       if (r.width <= 0 || r.height <= 0) return;
       const x = (event.clientX - r.left) / r.width;
       const y = (event.clientY - r.top) / r.height;
       if (x < 0 || x > 1 || y < 0 || y > 1) return;
       const edges: { orientation: Orientation; side: SplitSide; distance: number }[] = [];
-      if (controller.fits.value.cols) {
+      const canSplit = current.tabs.some(tab => tab !== source?.id) && source.labels !== undefined;
+      if (canSplit && current.fits.cols) {
         if (x <= 1 / 3) edges.push({ orientation: "cols", side: "start", distance: x });
         if (x >= 2 / 3) edges.push({ orientation: "cols", side: "end", distance: 1 - x });
       }
-      if (controller.fits.value.rows) {
+      if (canSplit && current.fits.rows) {
         if (y <= 1 / 3) edges.push({ orientation: "rows", side: "start", distance: y });
         if (y >= 2 / 3) edges.push({ orientation: "rows", side: "end", distance: 1 - y });
       }
       const edge = edges.sort((a, b) => a.distance - b.distance)[0];
-      if (edge === undefined) return;
-      const rect = host.getBoundingClientRect();
+      if (edge === undefined) {
+        if (x > 1 / 3 && x < 2 / 3 && y > 1 / 3 && y < 2 / 3 && paneIndex !== controller.paneOf(source.id)) {
+          const end = insertion(pane.querySelector<HTMLElement>(".split-tab-strip"), paneIndex, null);
+          target.value = { ...end, shade: paneRect(pane) };
+          highlight = pane;
+          highlight.classList.add("split-tabs-pane--drop-target");
+        }
+        return;
+      }
+      const rect = r;
+      const relative = paneRect(pane);
       const cols = edge.orientation === "cols";
       const width = cols ? (rect.width - controller.dividerSize) / 2 : rect.width;
       const height = cols ? rect.height : (rect.height - controller.dividerSize) / 2;
       target.value = {
-        kind: "split", orientation: edge.orientation, side: edge.side, marker: null,
-        label: source.labels[edge.orientation],
+        kind: "split", pane: paneIndex, orientation: edge.orientation, side: edge.side, marker: null,
+        label: source.labels![edge.orientation],
         shade: {
-          left: cols && edge.side === "end" ? width + controller.dividerSize : 0,
-          top: !cols && edge.side === "end" ? height + controller.dividerSize : 0,
+          left: relative.left + (cols && edge.side === "end" ? width + controller.dividerSize : 0),
+          top: relative.top + (!cols && edge.side === "end" ? height + controller.dividerSize : 0),
           width, height,
         },
       };
@@ -214,11 +220,14 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     cleanup();
     if (tab === null || drop === null) return;
     if (external) {
-      beforeDrop?.(drop);
-      if (drop.kind === "place") controller.insert(tab, drop.pane, drop.beforeId);
-      else controller.insertSplit(tab, drop.orientation, drop.side);
+      const register = beforeDrop === undefined ? undefined : () => beforeDrop(drop);
+      if (drop.kind === "place") {
+        if (register === undefined) controller.insert(tab, drop.pane, drop.beforeId);
+        else controller.insert(tab, drop.pane, drop.beforeId, register);
+      } else if (register === undefined) controller.insertSplit(tab, drop.orientation, drop.side, drop.pane);
+      else controller.insertSplit(tab, drop.orientation, drop.side, drop.pane, register);
     } else if (drop.kind === "place") controller.place(tab, drop.pane, drop.beforeId);
-    else controller.splitAt(tab, drop.orientation, drop.side);
+    else controller.splitAt(tab, drop.orientation, drop.side, drop.pane);
   }
   function cancel(event: PointerEvent): void { if (event.pointerId === source?.pointerId) cleanup(); }
   function keydown(event: KeyboardEvent): void { if (event.key === "Escape") cleanup(); }

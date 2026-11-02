@@ -19,6 +19,21 @@
   import { createSplitTabsController, SplitTabs, SplitTabStrip, SplitTabsKeep } from "/dist/index.js";
 
   const count = Number(new URLSearchParams(location.search).get("n") || 12);
+  window.resizeLog = [];
+  const NativeResizeObserver = window.ResizeObserver;
+  window.ResizeObserver = class extends NativeResizeObserver {
+    constructor(callback) {
+      super((entries, observer) => {
+        window.resizeLog.push(entries.map(entry => [entry.contentRect.width, entry.contentRect.height]));
+        callback(entries, observer);
+      });
+      window.resizeLog.push("constructed");
+    }
+    observe(element, options) {
+      window.resizeLog.push(["observe", element.className]);
+      super.observe(element, options);
+    }
+  };
   const tabs = ref(Array.from({ length: count }, (_, i) => `tab-${String.fromCharCode(97 + i)}`));
   const active = ref(tabs.value[0]);
   const optional = ref([]);
@@ -69,9 +84,9 @@
       stripLabels: labels,
     }, {
       ...(end.value ? { pane: ({ pane }) => h(SplitTabStrip, {
-        controller, pane: pane.index, labels, alwaysShow: true, splitButtons: splitButtons.value,
+        controller, pane: pane.id, labels, alwaysShow: true, splitButtons: splitButtons.value,
       }, {
-        end: () => h("button", { type: "button", onClick: () => controller.open("tab-l", pane.index) }, "Add tab"),
+        end: () => h("button", { type: "button", onClick: () => controller.open("tab-l", pane.id) }, "Add tab"),
       }) } : {}),
       keep: () => tabs.value.map(tab => h(SplitTabsKeep, { key: tab, tab, part: "body" },
         () => h("div", { class: "content", style: "height:100%" }, `${tab} content`))),

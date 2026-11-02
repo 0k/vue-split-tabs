@@ -16,14 +16,14 @@ const controller = esm.createSplitTabsController({
 controller.setContainerSize(206, 206);
 controller.split("b", "cols");
 assert.equal(controller.isSplit.value, true);
-controller.select(0, "a");
+controller.select(controller.panes.value[0].id, "a");
 assert.equal(controller.intent.value.firstActive, "a");
 assert.equal(controller.restoredActive.value, "a");
 controller.setContainerSize(0, 0);
 assert.equal(controller.restoredActive.value, "a");
 controller.merge();
 assert.equal(controller.restoredActive.value, "");
-controller.place("b", 0, "a");
+controller.place("b", controller.panes.value[0].id, "a");
 assert.deepEqual([...controller.intent.value.order], ["b", "a"]);
 assert.deepEqual([...controller.panes.value[0].tabs], ["b", "a"]);
 controller.setContainerSize(206, 206);
@@ -38,17 +38,17 @@ const optional = esm.createSplitTabsController({
 });
 assert.deepEqual([...optional.panes.value[0].tabs], ["a"]);
 assert.equal(optional.isOptional("b"), true);
-optional.open("b", 1);
+optional.open("b", optional.panes.value[0].id);
 assert.deepEqual([...optional.opened.value], ["b"]);
 assert.equal(optional.panes.value[0].active, "b");
 optional.close("b");
 assert.deepEqual([...optional.opened.value], []);
 assert.equal(optional.panes.value[0].active, "a");
-optional.open("b", 0);
+optional.open("b", optional.panes.value[0].id);
 optional.replace("b", "a");
 assert.deepEqual([...optional.opened.value], []);
 assert.equal(optional.panes.value[0].active, "a");
-optional.insert("b", 0, "a");
+optional.insert("b", optional.panes.value[0].id, "a");
 assert.deepEqual([...optional.panes.value[0].tabs], ["b", "a"]);
 optional.close("b");
 optional.setContainerSize(206, 206);
@@ -59,24 +59,25 @@ const declarations = readFileSync(resolve("dist/controller.d.ts"), "utf8");
 assert.doesNotMatch(readFileSync(resolve("dist/index.d.ts"), "utf8"), /import\s*["'][^"']*\.css/);
 assert.equal(readFileSync(resolve("dist/style.css"), "utf8"), readFileSync(resolve("src/style.css"), "utf8"));
 const expectedFiles = [
-  "index.js", "index.js.map", "index.d.ts", "style.css", "controller.d.ts", "context.d.ts", "drag.d.ts",
-  "SplitPane.vue.d.ts", "SplitTabs.vue.d.ts", "SplitTabsAnchor.vue.d.ts", "SplitTabsKeep.vue.d.ts", "SplitTabStrip.vue.d.ts",
+  "index.js", "index.js.map", "index.d.ts", "style.css", "controller.d.ts", "context.d.ts", "drag.d.ts", "tree.d.ts",
+  "SplitPane.vue.d.ts", "SplitLayout.vue.d.ts", "SplitTabs.vue.d.ts", "SplitTabsAnchor.vue.d.ts", "SplitTabsKeep.vue.d.ts", "SplitTabStrip.vue.d.ts",
 ];
 assert.deepEqual(readdirSync(resolve("dist")).sort(), expectedFiles.sort());
 assert.match(declarations, /firstActive: string/);
 assert.match(declarations, /restoredActive: ComputedRef<string>/);
 assert.match(declarations, /order: string\[\]/);
-assert.match(declarations, /splitAt\(id: string, orientation: Orientation, side: SplitSide\): void/);
-assert.match(declarations, /place\(id: string, pane: PaneIndex, beforeId: string \| null\): void/);
+assert.match(declarations, /splitAt\(id: string, orientation: Orientation, side: SplitSide, pane\?: PaneId\): void/);
+assert.match(declarations, /place\(id: string, pane: PaneId, beforeId: string \| null\): void/);
 assert.match(declarations, /optional\?: MaybeRefOrGetter<readonly string\[\]>/);
 assert.match(declarations, /readonly opened: ComputedRef<readonly string\[\]>/);
-assert.match(declarations, /open\(id: string, pane: PaneIndex\): void/);
+assert.match(declarations, /open\(id: string, pane: PaneId\): void/);
 assert.match(declarations, /close\(id: string\): void/);
 assert.match(declarations, /replace\(oldId: string, newId: string\): void/);
-assert.match(declarations, /insert\(id: string, pane: PaneIndex, beforeId: string \| null\): void/);
-assert.match(declarations, /insertSplit\(id: string, orientation: Orientation, side: SplitSide\): void/);
+assert.match(declarations, /insert\(id: string, pane: PaneId, beforeId: string \| null, register\?: \(\) => void\): void/);
+assert.match(declarations, /insertSplit\(id: string, orientation: Orientation, side: SplitSide, pane\?: PaneId, register\?: \(\) => void\): void/);
 assert.match(readFileSync(resolve("dist/SplitTabs.vue.d.ts"), "utf8"), /startExternalDrag:/);
 assert.match(declarations, /isOptional\(id: string\): boolean/);
+assert.match(declarations, /readonly cuts: ComputedRef<ReadonlyMap<string, EffectiveCut>>/);
 const code = readFileSync(resolve("dist/index.js"), "utf8");
 assert.match(code, /from\s*["']vue["']/);
 for (const unsupported of [

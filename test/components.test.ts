@@ -30,9 +30,9 @@ describe("on-demand strip controls", () => {
     c.setContainerSize(606, 406);
     if (split) c.split("d", "cols");
     const wrapper = mount(SplitTabStrip, { attachTo: document.body, props: {
-      controller: c, pane: 0, labels: { ...labels, close: "Close" },
+      controller: c, pane: c.panes.value[0]!.id, labels: { ...labels, close: "Close" },
     }, slots: { end: () => h("button", { type: "button" }, "Add") } });
-    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(split ? 3 : 8);
+    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(split ? 6 : 8);
     await wrapper.setProps({ splitButtons: false });
     expect(wrapper.find(".split-tab-strip-send").exists()).toBe(false);
     expect(wrapper.get(".split-tab-strip-end").text()).toBe("Add");
@@ -45,7 +45,7 @@ describe("on-demand strip controls", () => {
     await wrapper.get(".split-tab-strip-close").trigger("click");
     expect(c.paneOf("b")).toBeNull();
     await wrapper.setProps({ splitButtons: true });
-    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(split ? 2 : 6);
+    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(split ? 4 : 6);
   });
 
   it("renders close only for optional tabs with a close label and closes without selecting or dragging", async () => {
@@ -80,10 +80,10 @@ describe("on-demand strip controls", () => {
     const c = controller({ optional: ["b"] });
     c.open("b", 0);
     c.setContainerSize(606, 406);
-    const plain = mount(SplitTabStrip, { props: { controller: c, pane: 0, labels } });
+    const plain = mount(SplitTabStrip, { props: { controller: c, pane: c.panes.value[0]!.id, labels } });
     expect(plain.find(".split-tab-strip-close").exists()).toBe(false);
     const wrapper = mount(SplitTabStrip, { props: {
-      controller: c, pane: 0, labels: { ...labels, close: "Close" }, iconClass: "host-icon",
+      controller: c, pane: c.panes.value[0]!.id, labels: { ...labels, close: "Close" }, iconClass: "host-icon",
     } });
     const item = wrapper.get('[data-split-tabs-tab="b"]');
     const title = item.get(".split-tab-strip-title");
@@ -102,7 +102,8 @@ describe("on-demand strip controls", () => {
     expect(title.get(".split-tab-strip-tab").classes()).not.toContain("split-tab-strip-tab--active");
     c.split("d", "cols");
     await nextTick();
-    expect([...item.element.children].slice(1).map((child) => child.className)).toEqual(["split-tab-strip-send host-icon"]);
+    expect([...item.element.children].slice(1).map((child) => child.className))
+      .toEqual(["split-tab-strip-send host-icon", "split-tab-strip-send host-icon"]);
   });
 
   it("renders end only when provided, after tabs and outside items, without changing visibility", () => {
@@ -125,7 +126,7 @@ describe("on-demand strip controls", () => {
     const c = controller();
     const wrapper = mount(SplitTabs, { attachTo: document.body,
       props: { controller: c, labels: { divider: "Resize" } },
-      slots: { pane: () => h(SplitTabStrip, { controller: c, pane: 0, labels }, {
+      slots: { pane: () => h(SplitTabStrip, { controller: c, pane: c.panes.value[0]!.id, labels }, {
         end: () => h("button", { type: "button" }, "Add"),
       }) },
     });
@@ -212,6 +213,23 @@ describe("SplitTabs", () => {
     await nextTick();
   });
 
+  it("reports the mounted root's current size before the first observer delivery", () => {
+    const observe = vi.fn();
+    const disconnect = vi.fn();
+    class PendingObserver {
+      observe = observe;
+      disconnect = disconnect;
+      unobserve = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", PendingObserver);
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(606);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(406);
+    const { c, wrapper } = layout();
+    expect(c.fits.value, "Expected measured mounted root even while ResizeObserver has not delivered").toEqual({ rows: true, cols: true });
+    wrapper.unmount();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["rows", "cols"] as const)("maps %s divider pointers relative to root, guards mouse and foreign pointers", async (o) => {
     const { c, wrapper } = startSplit(o);
     const divider = wrapper.get("[role=separator]").element;
@@ -262,7 +280,7 @@ describe("SplitTabs", () => {
     c.commitRatio(0.7);
     const { wrapper } = layout(c);
     const divider = wrapper.get(".split-tabs-divider");
-    const commit = vi.spyOn(c, "commitRatio");
+    const commit = vi.spyOn(c, "equalize");
     s.setItem.mockClear();
     for (let i = 0; i < 2; i++) {
       pointer(divider.element, "pointerdown", { pointerType: "mouse", clientX: 450, clientY: 320 });
@@ -271,7 +289,7 @@ describe("SplitTabs", () => {
     }
     expect(commit).not.toHaveBeenCalled();
     await divider.trigger("dblclick");
-    expect(commit).toHaveBeenCalledExactlyOnceWith(0.5);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(divider.attributes("data-cut"));
     expect(divider.attributes("aria-valuenow")).toBe("50");
     expect(s.setItem).toHaveBeenCalledTimes(1);
     const table = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { intent: { ratio: number } }[] };
@@ -309,12 +327,12 @@ describe("SplitTabs", () => {
     c.commitRatio(0.7);
     const { wrapper } = layout(c);
     const divider = wrapper.get<HTMLElement>(".split-tabs-divider");
-    const commit = vi.spyOn(c, "commitRatio");
+    const commit = vi.spyOn(c, "equalize");
     s.setItem.mockClear();
     divider.element.focus();
     expect(document.activeElement).toBe(divider.element);
     await divider.trigger("keydown", { key: "Enter" });
-    expect(commit).toHaveBeenCalledExactlyOnceWith(0.5);
+    expect(commit).toHaveBeenCalledExactlyOnceWith(divider.attributes("data-cut"));
     expect(divider.attributes("aria-valuenow")).toBe("50");
     expect(s.setItem).toHaveBeenCalledTimes(1);
     const table = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { intent: { ratio: number } }[] };
@@ -446,13 +464,13 @@ describe("strip", () => {
     const { wrapper } = startSplit();
     expect(wrapper.findAll(".split-tab-strip-tab").map((t) => t.text())).toEqual(["a", "c", "d", "b"]);
     expect(wrapper.find("button button").exists()).toBe(false);
-    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(4);
+    expect(wrapper.findAll(".split-tab-strip-send")).toHaveLength(6);
   });
 
   it.each(["rows", "cols"] as const)("direct orientation icons offer %s in one click with host labels/hooks", async (orientation) => {
     const c = controller();
     c.setContainerSize(orientation === "cols" ? 606 : 100, orientation === "rows" ? 406 : 100);
-    const wrapper = mount(SplitTabStrip, { attachTo: document.body, props: { controller: c, pane: 0, labels, iconClass: "host-icon" } });
+    const wrapper = mount(SplitTabStrip, { attachTo: document.body, props: { controller: c, pane: c.panes.value[0]!.id, labels, iconClass: "host-icon" } });
     const icons = wrapper.findAll(".split-tab-strip-send");
     expect(icons).toHaveLength(4);
     expect(icons.map((icon) => icon.attributes("data-orientation"))).toEqual(Array(4).fill(orientation));
@@ -466,7 +484,7 @@ describe("strip", () => {
     expect(icon.get("path").attributes("d")).toBe(orientation === "rows" ? "M3 12h18" : "M12 3v18");
     await icon.trigger("click");
     expect(c.orientation.value).toBe(orientation);
-    expect(c.paneOf("a")).toBe(1);
+    expect(c.paneOf("a")).toBe(c.panes.value[1]?.id);
     expect(wrapper.find("[role=menu]").exists()).toBe(false);
   });
 
@@ -482,7 +500,7 @@ describe("strip", () => {
     expect(wrapper.find(".split-tab-strip-send").exists()).toBe(false);
     const single = controller({ tabs: ["a"] });
     single.setContainerSize(606, 406);
-    const strip = mount(SplitTabStrip, { props: { controller: single, pane: 0, labels, alwaysShow: true } });
+    const strip = mount(SplitTabStrip, { props: { controller: single, pane: single.panes.value[0]!.id, labels, alwaysShow: true } });
     expect(strip.find(".split-tab-strip-send").exists()).toBe(false);
   });
 
@@ -502,23 +520,23 @@ describe("strip", () => {
     expect(wrapper.findAll(".split-tab-strip-item--active .split-tab-strip-tab").map((tab) => tab.text())).toEqual(["c"]);
   });
 
-  it.each(["rows", "cols"] as const)("renders %s directional SVGs and sends a tab on icon click", async (o) => {
+  it.each(["rows", "cols"] as const)("offers labelled %s splits inside an existing layout", async (o) => {
     const { c, wrapper } = startSplit(o);
-    const icons = wrapper.findAll(".split-tab-strip-send");
-    expect(icons[0]?.get("svg").attributes("data-direction")).toBe(o === "rows" ? "down" : "right");
-    expect(icons[3]?.get("svg").attributes("data-direction")).toBe(o === "rows" ? "up" : "left");
-    expect(icons[0]?.attributes("title")).toBe(labels.sendToOther);
-    expect(icons[0]?.attributes("data-orientation")).toBeUndefined();
-    expect(icons[0]?.get("svg").attributes("stroke-width")).toBe("2");
-    expect(icons[0]?.findAll("svg rect")).toHaveLength(2);
-    await icons[0]?.trigger("click");
-    expect(c.paneOf("a")).toBe(1);
+    const icon = wrapper.get(`[data-split-tabs-tab="a"] [data-orientation="${o}"]`);
+    expect(icon.get("svg").attributes("data-direction")).toBe(o);
+    expect(icon.attributes("title")).toBe(labels[o]);
+    expect(icon.get("svg").attributes("stroke-width")).toBe("2");
+    expect(icon.findAll("svg rect")).toHaveLength(2);
+    await icon.trigger("click");
+    expect(c.panes.value).toHaveLength(3);
+    expect(c.panes.value[1]?.tabs).toEqual(["a"]);
   });
 
   it("drag targeting requires >6px and the other pane in the same root", async () => {
     const { c, wrapper } = startSplit();
     const other = startSplit();
     const target = wrapper.get("[data-split-tabs-pane='1']").element;
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue(new DOMRect(303, 0, 297, 400));
     const hit = vi.fn((): Element => other.wrapper.get("[data-split-tabs-pane='1']").element);
     vi.stubGlobal("document", document);
     Object.defineProperty(document, "elementFromPoint", { configurable: true, value: hit });
@@ -532,11 +550,11 @@ describe("strip", () => {
     expect(wrapper.find(".split-tab-strip-item--dragging").exists()).toBe(true);
     expect(other.wrapper.find(".split-tabs-pane--drop-target").exists()).toBe(false);
     hit.mockReturnValue(target);
-    pointer(window, "pointermove", { clientX: 50, clientY: 30 });
+    pointer(window, "pointermove", { clientX: 450, clientY: 200 });
     expect(target.classList.contains("split-tabs-pane--drop-target")).toBe(true);
-    pointer(window, "pointerup", { clientX: 50, clientY: 30 });
+    pointer(window, "pointerup", { clientX: 450, clientY: 200 });
     await nextTick();
-    expect(c.paneOf("a")).toBe(1);
+    expect(c.paneOf("a")).toBe(c.panes.value[1]?.id);
     expect(target.classList.contains("split-tabs-pane--drop-target")).toBe(false);
     await wrapper.get("[data-split-tabs-pane='0'] .split-tab-strip-tab").trigger("click");
   });
@@ -574,7 +592,7 @@ describe("strip", () => {
 
   it("does not start drag on secondary mouse or for unrelated pointers in either layout", async () => {
     const { c, wrapper } = layout();
-    const button = wrapper.get(".split-tab-strip-tab").element;
+    let button = wrapper.get(".split-tab-strip-tab").element;
     pointer(button, "pointerdown", { pointerType: "mouse", button: 2, clientX: 0 });
     pointer(window, "pointermove", { clientX: 10 });
     await nextTick();
@@ -582,6 +600,7 @@ describe("strip", () => {
     c.setContainerSize(606, 406);
     c.split("b", "cols");
     await nextTick();
+    button = wrapper.get(".split-tab-strip-tab").element;
     pointer(button, "pointerdown", { pointerType: "mouse", button: 2 });
     pointer(window, "pointermove", { clientX: 10 });
     await nextTick();

@@ -7,38 +7,26 @@ const { splitButtons = true, ...props } = defineProps<SplitTabStripProps>();
 const emit = defineEmits<{ select: [id: string] }>();
 const context = inject(splitTabsKey, undefined);
 const root = ref<HTMLElement | null>(null);
-const injectedPane = inject(paneKey, 0);
+const injectedPane = inject(paneKey, "");
 const pane = computed(() => props.pane ?? injectedPane);
-const current = computed(() => props.controller?.panes.value.find((p) => p.index === pane.value));
+const current = computed(() => props.controller?.panes.value.find((p) => p.id === pane.value));
 const tabs = computed(() => props.controller === undefined ? props.tabs ?? [] : current.value?.tabs ?? []);
 const active = computed(() => props.controller === undefined ? props.active ?? "" : current.value?.active ?? "");
 const split = computed(() => props.controller?.isSplit.value ?? false);
 const visible = computed(() => split.value || props.alwaysShow || tabs.value.length > 1);
 const options = computed<Orientation[]>(() => {
-  const fits = props.controller?.fits.value;
+  const fits = current.value?.fits;
   return fits === undefined ? [] : (["rows", "cols"] as const).filter((o) => fits[o]);
 });
-type Direction = Orientation | "down" | "up" | "right" | "left";
-interface IconAction { direction: Direction; orientation: Orientation | null; label: string }
-const arrows: Record<Direction, string> = {
-  down: "M12 8v8m-3-3 3 3 3-3", up: "M12 16V8m-3 3 3-3 3 3",
-  right: "M8 12h8m-3-3 3 3-3 3", left: "M16 12H8m3-3-3 3 3 3",
-  rows: "", cols: "",
-};
+interface IconAction { direction: Orientation; orientation: Orientation; label: string }
 const actions = computed<IconAction[]>(() => {
   const labels = props.labels;
   if (!splitButtons || labels === undefined) return [];
-  if (split.value) {
-    const direction = props.controller?.orientation.value === "rows" ? pane.value === 0 ? "down" : "up" : pane.value === 0 ? "right" : "left";
-    return [{ direction, orientation: null, label: labels.sendToOther }];
-  }
-  if (!props.controller?.canOfferSplit.value) return [];
+  if (tabs.value.length < 2) return [];
   return options.value.map((o) => ({ direction: o, orientation: o, label: labels[o] }));
 });
-function horizontal(direction: Direction): boolean { return direction === "rows" || direction === "down" || direction === "up"; }
-function send(id: string, orientation: Orientation | null): void {
-  if (orientation === null) props.controller?.moveToOther(id);
-  else props.controller?.split(id, orientation);
+function send(id: string, orientation: Orientation): void {
+  props.controller?.split(id, orientation, pane.value);
 }
 
 const marker = computed(() => {
@@ -94,13 +82,12 @@ onBeforeUnmount(() => context?.drag.cancelOwner(root.value));
         :class="iconClass" :data-orientation="action.orientation ?? undefined"
         :aria-label="action.label" :title="action.label" @click="send(id, action.orientation)">
         <svg viewBox="0 0 24 24" aria-hidden="true" :data-direction="action.direction" fill="none" stroke="currentColor" stroke-width="2">
-          <template v-if="horizontal(action.direction)">
+          <template v-if="action.direction === 'rows'">
             <rect x="3" y="3" width="18" height="7" />
             <rect x="3" y="14" width="18" height="7" />
             <path d="M3 12h18" />
           </template>
           <template v-else><rect x="3" y="3" width="7" height="18" /><rect x="14" y="3" width="7" height="18" /><path d="M12 3v18" /></template>
-          <path v-if="arrows[action.direction]" :d="arrows[action.direction]" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
     </div>

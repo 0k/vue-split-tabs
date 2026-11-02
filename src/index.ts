@@ -1,6 +1,6 @@
 export { createSplitTabsController } from "./controller.js";
 export type {
-  Orientation, PaneIndex, SplitSide, SplitTabsController, SplitTabsIntent,
+  Orientation, PaneId, PaneNode, CutNode, LayoutNode, EffectiveNode, EffectiveCut, SplitSide, SplitTabsController, SplitTabsIntent,
   SplitTabsOptions, SplitTabsPane, SplitTabsStorage,
 } from "./controller.js";
 export type { SplitTabStripLabels, SplitTabStripProps } from "./context.js";
