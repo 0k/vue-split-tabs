@@ -55,7 +55,7 @@ storage keys, routing, data, and themes.
   `firstActive`, overriding any older request.
 - `moveTo(id, paneId)` puts the tab away: it goes behind the
   destination pane's shown tab, which stays shown, in both directions and after
-  a merge. Only drag-and-drop (`place`) reveals the moved tab where it is dropped.
+  a merge. Drag-and-drop and pane picking use `place` to reveal the moved tab.
   Do not restore `moveToOther`: there is no unique other pane in a recursive layout.
 - When the shown tab leaves its pane (split, move, cross-pane place, start-side
   split, close, replacement by an already-visible target), the replacement is the most recently viewed tab still in that pane,
@@ -76,6 +76,15 @@ storage keys, routing, data, and themes.
 - Keep content never remounts on pane moves, collapse, or restore. Use Teleport
   retargeting, never conditional mounting of the persistent content.
 - Labels are always host-supplied; never introduce built-in visible strings.
+- `SplitTabsGlyph` is the single drawing for split/move/close icons; strips and
+  host menus reuse it. Keep the undirected split and close drawings unchanged.
+- One pane picker belongs to each root context. Number only effective panes by
+  index + 1. Choosing uses `place(tab, pane, null)` to move AND reveal; source and
+  unknown panes are not pickable and keep the picker open. Escape, outside
+  pointerdown, pane-id/order changes and loss of tab visibility cancel it.
+  Register window listeners only in pick mode; remove them on end/cancel/unmount.
+  Preview is pointer-transparent. Overlays show only numbers; menu text and
+  labels are host-supplied, never built into the library.
 - In every pane, split controls are direct per-orientation buttons for that pane's
   fitting axes, labelled by `rows` and `cols`. There is no implicit destination or
   directional move button. A host may disable all these buttons with

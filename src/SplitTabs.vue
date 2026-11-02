@@ -4,13 +4,15 @@ import type { SplitTabsController } from "./controller.js";
 import { splitTabsKey, type SplitTabStripLabels } from "./context.js";
 import SplitLayout from "./SplitLayout.vue";
 import { createTabDrag, previewStyle } from "./drag.js";
+import { createPanePick } from "./pick.js";
 
 const props = defineProps<{ controller: SplitTabsController; labels: { divider: string }; stripLabels?: SplitTabStripLabels }>();
 const c = props.controller;
 const root = ref<HTMLElement | null>(null);
 const drag = createTabDrag(c, root);
+const pick = createPanePick(c);
 defineExpose({ startExternalDrag: drag.startExternal });
-provide(splitTabsKey, { controller: c, root, anchors: shallowReactive(new Map<string, HTMLElement>()), drag });
+provide(splitTabsKey, { controller: c, root, anchors: shallowReactive(new Map<string, HTMLElement>()), drag, pick });
 let observer: ResizeObserver | undefined;
 onMounted(() => {
   if (root.value === null) return;
@@ -22,7 +24,7 @@ onMounted(() => {
   });
   observer.observe(root.value);
 });
-onBeforeUnmount(() => { observer?.disconnect(); drag.dispose(); });
+onBeforeUnmount(() => { observer?.disconnect(); drag.dispose(); pick.dispose(); });
 </script>
 
 <template>

@@ -15,8 +15,13 @@
 <div id="host"></div>
 <button id="external-row" type="button">External item</button>
 <script type="module">
-  import { createApp, h, ref } from "vue";
-  import { createSplitTabsController, SplitTabs, SplitTabStrip, SplitTabsKeep } from "/dist/index.js";
+  import { createApp, defineComponent, h, ref } from "vue";
+  import { createSplitTabsController, SplitTabs, SplitTabStrip, SplitTabsKeep, useSplitTabsPick } from "/dist/index.js";
+
+  const PickProbe = defineComponent({ setup() {
+    window.pick = useSplitTabsPick();
+    return () => null;
+  } });
 
   const count = Number(new URLSearchParams(location.search).get("n") || 12);
   window.resizeLog = [];
@@ -88,8 +93,8 @@
       }, {
         end: () => h("button", { type: "button", onClick: () => controller.open("tab-l", pane.id) }, "Add tab"),
       }) } : {}),
-      keep: () => tabs.value.map(tab => h(SplitTabsKeep, { key: tab, tab, part: "body" },
-        () => h("div", { class: "content", style: "height:100%" }, `${tab} content`))),
+      keep: () => [h(PickProbe), ...tabs.value.map(tab => h(SplitTabsKeep, { key: tab, tab, part: "body" },
+        () => h("div", { class: "content", style: "height:100%" }, `${tab} content`)))],
     }),
   }).mount("#host");
 </script>

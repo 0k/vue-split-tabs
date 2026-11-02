@@ -11,6 +11,7 @@
 }
 .split-tabs--cols { flex-direction: row; }
 .split-tabs-pane {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 0;
@@ -18,6 +19,48 @@
   min-height: 0;
   overflow: hidden;
   background: var(--split-tabs-pane-background, transparent);
+}
+.split-tabs-pane-number {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--split-tabs-pane-number-z-index, 5);
+  background: var(--split-tabs-pane-number-background, rgba(0, 0, 0, 0.45));
+  cursor: pointer;
+}
+.split-tabs-pane-number[data-mode="preview"] {
+  background: var(--split-tabs-pane-number-preview-background, rgba(0, 0, 0, 0.25));
+  pointer-events: none;
+  cursor: default;
+}
+.split-tabs-pane-number[data-mode="pick"]:not([data-current]):hover {
+  background: var(--split-tabs-pane-number-hover-background, rgba(127, 127, 127, 0.45));
+}
+.split-tabs-pane-number[data-current] {
+  background: var(--split-tabs-pane-number-current-background, rgba(0, 0, 0, 0.6));
+  pointer-events: none;
+  cursor: default;
+}
+.split-tabs-pane-number-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--split-tabs-pane-number-badge-size, 56px);
+  height: var(--split-tabs-pane-number-badge-size, 56px);
+  border-radius: var(--split-tabs-pane-number-badge-radius, 8px);
+  background: var(--split-tabs-pane-number-badge-background, rgba(0, 0, 0, 0.65));
+  color: var(--split-tabs-pane-number-badge-color, #fff);
+  font-size: var(--split-tabs-pane-number-badge-font-size, 32px);
+}
+.split-tabs-pane-number[data-mode="preview"] .split-tabs-pane-number-badge {
+  width: var(--split-tabs-pane-number-preview-badge-size, 40px);
+  height: var(--split-tabs-pane-number-preview-badge-size, 40px);
+  border-radius: var(--split-tabs-pane-number-preview-badge-radius, var(--split-tabs-pane-number-badge-radius, 8px));
+  background: var(--split-tabs-pane-number-preview-badge-background, var(--split-tabs-pane-number-badge-background, rgba(0, 0, 0, 0.65)));
+  color: var(--split-tabs-pane-number-preview-badge-color, var(--split-tabs-pane-number-badge-color, #fff));
+  font-size: var(--split-tabs-pane-number-preview-badge-font-size, 24px);
 }
 .split-tabs-cut { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .split-tabs-cut.split-tabs--cols { flex-direction: row; }

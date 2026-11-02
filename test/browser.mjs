@@ -44,6 +44,29 @@ async function touchEnd(page, cdp) {
 
 const order = page => page.evaluate(() => [...window.controller.panes.value[0].tabs]);
 const cases = [
+  ["pane picker shows effective numbers, moves and reveals via a digit, and supports pointer selection", async page => {
+    await page.evaluate(() => { window.controller.split("tab-l", "cols"); window.pick.preview("tab-b"); });
+    const overlays = page.locator(".split-tabs-pane-number");
+    await overlays.first().waitFor();
+    assert.deepEqual(await overlays.allTextContents(), ["1", "2"]);
+    assert.equal(await overlays.first().evaluate(el => getComputedStyle(el).pointerEvents), "none");
+    assert.equal(await overlays.first().evaluate(el => getComputedStyle(el.parentElement).position), "relative");
+    await page.evaluate(() => window.pick.start("tab-b"));
+    const current = page.locator(".split-tabs-pane-number[data-current]");
+    const target = page.locator(".split-tabs-pane-number:not([data-current])");
+    assert.equal(await current.evaluate(el => getComputedStyle(el).pointerEvents), "none");
+    assert.equal(await target.evaluate(el => getComputedStyle(el).pointerEvents), "auto");
+    assert.equal(await target.locator(".split-tabs-pane-number-badge").evaluate(el => el.getBoundingClientRect().width), 56);
+    await page.keyboard.press("2");
+    await page.waitForFunction(() => window.pick.mode.value === null);
+    assert.equal(await overlays.count(), 0);
+    assert.equal(await page.evaluate(() => window.controller.panes.value[1].active), "tab-b");
+    assert.equal(await page.locator('[data-split-tabs-pane="1"] .content:visible').textContent(), "tab-b content");
+    await page.evaluate(() => window.pick.start("tab-c"));
+    await target.click();
+    await page.waitForFunction(() => window.pick.mode.value === null);
+    assert.equal(await page.evaluate(() => window.controller.panes.value[1].active), "tab-c");
+  }],
   ["external sidebar handoff inserts at a strip slot and splits at the right edge", async page => {
     const row = page.locator("#external-row");
     assert.equal(await row.evaluate(el => el.closest(".split-tabs")), null);

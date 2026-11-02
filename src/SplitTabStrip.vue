@@ -2,6 +2,7 @@
 import { computed, inject, nextTick, onBeforeUnmount, ref } from "vue";
 import type { Orientation } from "./controller.js";
 import { paneKey, splitTabsKey, type SplitTabStripProps } from "./context.js";
+import SplitTabsGlyph from "./SplitTabsGlyph.vue";
 
 const { splitButtons = true, ...props } = defineProps<SplitTabStripProps>();
 const emit = defineEmits<{ select: [id: string] }>();
@@ -73,22 +74,13 @@ onBeforeUnmount(() => context?.drag.cancelOwner(root.value));
         </button>
         <button v-if="labels?.close && controller?.isOptional(id)" type="button" class="split-tab-strip-close" :class="iconClass"
           :aria-label="labels.close" :title="labels.close" @pointerdown.stop @click.stop="controller.close(id)">
-          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="m6 6 12 12M6 18 18 6" stroke-linecap="round" />
-          </svg>
+          <SplitTabsGlyph kind="close" />
         </button>
       </span>
       <button v-for="action in actions" :key="action.direction" type="button" class="split-tab-strip-send"
         :class="iconClass" :data-orientation="action.orientation ?? undefined"
         :aria-label="action.label" :title="action.label" @click="send(id, action.orientation)">
-        <svg viewBox="0 0 24 24" aria-hidden="true" :data-direction="action.direction" fill="none" stroke="currentColor" stroke-width="2">
-          <template v-if="action.direction === 'rows'">
-            <rect x="3" y="3" width="18" height="7" />
-            <rect x="3" y="14" width="18" height="7" />
-            <path d="M3 12h18" />
-          </template>
-          <template v-else><rect x="3" y="3" width="7" height="18" /><rect x="14" y="3" width="7" height="18" /><path d="M12 3v18" /></template>
-        </svg>
+        <SplitTabsGlyph kind="split" :orientation="action.orientation" />
       </button>
     </div>
     <div v-if="marker?.marker" class="split-tab-strip-marker" aria-hidden="true" :data-before="marker.beforeId ?? ''"

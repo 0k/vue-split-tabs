@@ -7,7 +7,8 @@ for (const file of ["index.js", "index.d.ts", "style.css"]) {
   assert.ok(statSync(resolve("dist", file)).size > 0, `${file} is nonempty`);
 }
 const esm = await import("@0k/vue-split-tabs");
-const expectedExports = ["SplitTabStrip", "SplitTabs", "SplitTabsAnchor", "SplitTabsKeep", "createSplitTabsController"];
+const expectedExports = ["SplitTabStrip", "SplitTabs", "SplitTabsAnchor", "SplitTabsGlyph", "SplitTabsKeep",
+  "createSplitTabsController", "useSplitTabsPick"];
 assert.deepEqual(Object.keys(esm).sort(), expectedExports);
 const controller = esm.createSplitTabsController({
   tabs: ["a", "b"], entryKey: "build-smoke", storageKey: "build-smoke",
@@ -59,7 +60,8 @@ const declarations = readFileSync(resolve("dist/controller.d.ts"), "utf8");
 assert.doesNotMatch(readFileSync(resolve("dist/index.d.ts"), "utf8"), /import\s*["'][^"']*\.css/);
 assert.equal(readFileSync(resolve("dist/style.css"), "utf8"), readFileSync(resolve("src/style.css"), "utf8"));
 const expectedFiles = [
-  "index.js", "index.d.ts", "style.css", "controller.d.ts", "context.d.ts", "drag.d.ts", "tree.d.ts",
+  "index.js", "index.d.ts", "style.css", "controller.d.ts", "context.d.ts", "drag.d.ts", "pick.d.ts", "tree.d.ts",
+  "SplitTabsGlyph.vue.d.ts",
   "SplitPane.vue.d.ts", "SplitLayout.vue.d.ts", "SplitTabs.vue.d.ts", "SplitTabsAnchor.vue.d.ts", "SplitTabsKeep.vue.d.ts", "SplitTabStrip.vue.d.ts",
 ];
 assert.deepEqual(readdirSync(resolve("dist")).sort(), expectedFiles.sort());

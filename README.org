@@ -380,6 +380,7 @@ or recursively remeasure those facts for every node.
 | SplitTabStrip, plain | tabs; active | Same slots/event; no controller/icons |
 | SplitTabsAnchor | part; inside pane | None |
 | SplitTabsKeep | tab; part; inside root | Default persistent content |
+| SplitTabsGlyph | kind: 'split', 'move' or 'close'; orientation?: Orientation; side?: SplitSide | None |
 
 Both strips accept ~alwaysShow~, ~splitButtons~ (default true), ~tabClass~
 and ~iconClass~. Default strips hide with fewer than two tabs unless split
@@ -394,6 +395,70 @@ Gesture hooks: ~split-tab-strip--draggable~, ~split-tab-strip-item--drag-armed~,
 ~split-tabs-drop-shade~ (~data-zone~, ~data-orientation~, ~data-side~).
 Panes expose ~data-pane-id~ for identity and ~data-split-tabs-pane~ for their
 current index. Cuts expose ~data-split-tabs-cut~ and dividers ~data-cut~.
+
+** Shared glyphs
+
+~SplitTabsGlyph~ renders an ~aria-hidden~ SVG with ~viewBox="0 0 24 24"~,
+~fill="none"~, ~stroke="currentColor"~ and stroke width 2. Hosts supply the
+accessible label on their containing button and size the SVG with CSS.
+
+- ~kind="split"~ with ~orientation="rows"~ or ~"cols"~ and no ~side~ is
+  the same two-half drawing with a middle line used by strip split buttons;
+  ~data-direction~ carries the orientation.
+- Adding ~side="start"~ or ~"end"~ removes the middle line and fills the
+  destination half with currentColor: left/right for cols, top/bottom for
+  rows. The SVG exposes ~data-orientation~ and ~data-side~.
+- ~kind="move"~ draws a rounded square with a right arrow and round
+  caps/joins. ~kind="close"~ draws the strip's round-capped cross.
+
+** Pane picker
+
+Call ~useSplitTabsPick(): SplitTabsPick | undefined~ in a descendant's setup
+to obtain the root's shared picker. Outside a ~SplitTabs~ root it returns
+~undefined~. The root creates one picker and disposes its watchers and
+listeners on unmount. Re-key the root when replacing its controller.
+
+~SplitTabsPick~ exposes readonly refs ~mode: null | 'preview' | 'pick'~,
+~tab: string | null~, and ~source: PaneId | null~ (the pane at start).
+
+| Method | Signature |
+|--------+-----------|
+| preview | (tabId: string): boolean |
+| start | (tabId: string): boolean |
+| cancel | (): void |
+| choose | (paneId: PaneId): void |
+| chooseNumber | (n: number): void |
+| numberOf | (paneId: PaneId): number or null |
+
+~preview~ and ~start~ return false without changing state when the tab is
+not visible in a pane or fewer than two effective panes exist. Otherwise
+they return true. Preview draws pointer-transparent numbers without window
+listeners. Start enables destination clicks and capture-phase window keys:
+digits 1–9 (including numpad via ~event.key~) choose and prevent default;
+Escape cancels and stops propagation. Pointerdown outside this root's picker
+overlays cancels. Switching back to preview removes pick listeners.
+
+Numbers are always ~pane.index + 1~ from ~controller.panes~; folded leaves
+are not numbered separately. ~numberOf~ returns null for an unknown pane.
+~chooseNumber~ works in preview and pick modes, so a host menu can handle
+digits itself while previewing. Choosing the source, an unknown pane, or an
+invalid number does nothing and keeps the picker open. A valid choice calls
+~controller.place(tab, paneId, null)~: move to the destination end, reveal the
+tab there, and end picking. Unlike ~moveTo~, it does not leave the tab hidden
+behind the destination's selection.
+
+Any pane-id/order change or the moved tab leaving visible tabs cancels both
+modes. Selection or size changes that retain pane ids/order do not cancel.
+End, cancel and root unmount remove every picker listener. The pane is the
+containing block for ~.split-tabs-pane-number~; it exposes ~data-mode~ and
+~data-current~ on the source. Its ~.split-tabs-pane-number-badge~ contains
+only the number. The source is pointer-transparent and cannot be chosen.
+Menus, action names and other visible text remain host-supplied.
+
+For example, a host menu can call ~pick.preview(id)~ on hover,
+~pick.start(id)~ on activation, ~pick.chooseNumber(n)~ for its own digit
+handler, and ~pick.cancel()~ when dismissing a preview. The library provides
+no context menu. With two panes a host may use ~place~ directly instead.
 
 ** External drag handoff
 
@@ -428,7 +493,7 @@ and invalid drops never call the hook. Touch hosts arrange their own
 pre-handoff scrolling policy; the root prevents touchmove only after handoff.
 
 Published declarations target ~moduleResolution: bundler~. The strict
-NodeNext probe still reports the four Vue SFC export-resolution errors;
+NodeNext probe still reports the five Vue SFC export-resolution errors;
 NodeNext support is not claimed. Relative TS imports use ~.js~ extensions.
 
 * Theming
@@ -477,6 +542,21 @@ follows the controller so measurement and rendering agree.
 | ~--split-tabs-close-hit~ | 18px |
 | ~--split-tabs-close-gap~ | 2px |
 | ~--split-tabs-icon-visible-opacity~ | 1 |
+| ~--split-tabs-pane-number-z-index~ | 5 |
+| ~--split-tabs-pane-number-background~ | rgba(0,0,0,0.45), pick overlay |
+| ~--split-tabs-pane-number-preview-background~ | rgba(0,0,0,0.25) |
+| ~--split-tabs-pane-number-current-background~ | rgba(0,0,0,0.6), either mode |
+| ~--split-tabs-pane-number-hover-background~ | rgba(127,127,127,0.45), pick destination |
+| ~--split-tabs-pane-number-badge-size~ | 56px, width and height |
+| ~--split-tabs-pane-number-badge-radius~ | 8px |
+| ~--split-tabs-pane-number-badge-background~ | rgba(0,0,0,0.65) |
+| ~--split-tabs-pane-number-badge-color~ | white |
+| ~--split-tabs-pane-number-badge-font-size~ | 32px |
+| ~--split-tabs-pane-number-preview-badge-size~ | 40px, width and height |
+| ~--split-tabs-pane-number-preview-badge-radius~ | pick badge radius |
+| ~--split-tabs-pane-number-preview-badge-background~ | pick badge background |
+| ~--split-tabs-pane-number-preview-badge-color~ | pick badge color |
+| ~--split-tabs-pane-number-preview-badge-font-size~ | 24px |
 
 * Development
 

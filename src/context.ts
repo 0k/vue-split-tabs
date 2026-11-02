@@ -1,12 +1,14 @@
 import type { InjectionKey, Ref } from "vue";
 import type { PaneId, SplitTabsController } from "./controller.js";
 import type { TabDrag } from "./drag.js";
+import type { PanePick } from "./pick.js";
 
 export interface SplitTabsContext {
   controller: SplitTabsController;
   root: Ref<HTMLElement | null>;
   anchors: Map<string, HTMLElement>;
   drag: TabDrag;
+  pick: PanePick;
 }
 export const splitTabsKey: InjectionKey<SplitTabsContext> = Symbol("split-tabs");
 export const paneKey: InjectionKey<PaneId> = Symbol("split-tabs-pane");
