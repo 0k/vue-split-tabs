@@ -23,10 +23,10 @@
   "publishConfig": { "access": "public" },
   "scripts": {
     "prepack": "npm run build",
-    "test": "vitest run --bail 1",
+    "test": "vitest run --bail 1 --configLoader runner --cache false",
     "test:browser": "node test/browser.mjs",
     "typecheck": "vue-tsc --noEmit",
-    "build": "node scripts/build.mjs clean && vue-tsc -p tsconfig.build.json && vite build && node scripts/build.mjs css",
+    "build": "node scripts/build.mjs clean && vue-tsc -p tsconfig.build.json && vite build --configLoader runner && node scripts/build.mjs css",
     "check": "npm run test && npm run typecheck && npm run build && node test/build.mjs && node test/types.mjs && npm run test:browser"
   },
   "peerDependencies": { "vue": "^3.5.0" },
