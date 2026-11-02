@@ -201,3 +201,15 @@ storage keys, routing, data, and themes.
 - Consumers depend on the npm release. Local path dependencies used to test
   unreleased changes are never committed, here or in consumers.
 - `README.md` is generated from `README.org` at release; never commit it.
+
+## Demo
+
+- The demo lives in `demo/` and must never be packaged. Keep it and `doc/`
+  outside the npm package allowlist and the library declaration build.
+- Exercise every user-facing feature through the public built package, including
+  its separate stylesheet. Render pane content generically through the pane slot
+  and controller pane list; never duplicate two fixed panes in demo markup.
+- Keep real-browser `demo:test` acceptance in `check`, including native CDP
+  touch input, fresh storage, blocked external requests and resource cleanup.
+- Regenerate README images under `doc/images/` only with `npm run demo:capture`
+  when visible behaviour changes; do not hand-edit the captures.

@@ -1,0 +1,232 @@
+* Demo acceptance ledger
+
+** Second independent review --- PASS
+
+| Finding / invariant                                           | Failing-first regression                                                                                                        |
+|---------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------|
+| 1 effective equalization minima, ordinary resize S8 unchanged | second review 1: cols/rows equalization uses effective collapsed minima while resize retains full intent minima                 |
+| 2 saved absent ownership                                      | second review 2: unrelated split/moveTo/place preserves an absent tab's saved owner across a start split                        |
+| 3 registration cannot invalidate a valid preview              | second review 3: external edge/centre registration applies the pre-registration preview without resurrecting an implicit source |
+| 3 real input                                                  | second review finding 3: absent nonoptional external registration applies the exact edge preview                                |
+| Host presence and optional classification transitions         | every random action preserves storage, absent ownership, rendered host role and valid shown tabs across host-input changes      |
+| Valid shown tab versus explicit empty host request            | semantic projection: remove/optional of the host-linked tab falls back without writing or inventing an empty request            |
+
+The expanded property test covers 12 seeds x 240 actions, including host-tab
+removal/restoration, optional-classification toggles, host requests and controller
+actions. It tracks saved hidden/absent owners until deliberate relocation, merge
+or explicit owner-leaf removal, and checks shown-tab validity, host-role semantics,
+zero derived writes and identical rendered/storage reloads after each step.
+
+All three targeted reproductions were observed failing before library repairs:
+194/206px instead of 200/200px; absent =c= removed from its saved owner; and
+external registration producing =[incoming] | [target tabs]= instead of the
+advertised =[target tabs] | [incoming]=. The real-pointer demo scenario reproduced
+that last mismatch before the library code changed. These tests now pass.
+
+The expanded property also exposed invalid shown state when a nonempty host request
+became unavailable, and absent-assignment loss during automatic last-tab promotion.
+Focused failing regressions were added for both before their fixes. Explicit merge
+still intentionally resets membership; surviving owners retain absent assignments.
+
+Final check pieces were executed separately, each with an explicit timeout:
+
+| Command              | Result                                                                    |
+|----------------------+---------------------------------------------------------------------------|
+| npm test             | *276 passed*, 11 files                                                    |
+| npm run typecheck    | *PASS*                                                                    |
+| npm run build        | *PASS*                                                                    |
+| node test/build.mjs  | *PASS*                                                                    |
+| node test/types.mjs  | *PASS*; Bundler supported, four known NodeNext SFC diagnostics            |
+| npm run test:browser | *17 passed*                                                               |
+| npm run demo:test    | *21 passed*                                                               |
+| npm run demo:capture | *PASS*; all regenerated images, GIF and review frames inspected with Read |
+| npm pack --dry-run   | *17 files*, no demo/ or doc/ entry                                        |
+
+Observed semantic-sequence coverage: *2,880 steps*, *172 host removals*,
+*125 host restorations*, *188 optional toggles*, *112 tracked hidden owners*,
+*24 verified owner restorations*, *289 size-collapsed pre-action states*, and
+*94 intent-changing actions while collapsed*. Shown-tab checks permit only a
+valid tab, the primary host's explicit empty request, or a genuinely empty pane.
+
+Insertion gained optional synchronous registration callbacks so the existing
+controller action captures its target before registration and applies that same
+preview afterward. Ordinary resize retains full intent minima; equalization and
+its final constraints use the cached effective projection's minima.
+
+Latest inspected media: demo-single.png 78707 bytes; demo-columns.png 135088;
+demo-thirds.png 137493; demo-nested.png 125068; demo-rows.png 104705;
+demo-drag.png 83377; demo-menu.png 89488; demo-phone.png 39398;
+demo.gif *2737686 bytes* (under 3 MB). Regeneration was warranted by visible
+sizing/selection/drop-placement repairs, not by documentation-only changes.
+
+** Independent-review repair ledger --- PASS
+
+| Finding                            | Direct public-controller regression                                                                                                             | Browser / additional evidence                                                                                                              |
+|------------------------------------+-------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------|
+| 1 unique membership and reload     | finding 1: moveTo/place into a collapsed first pane preserves unique membership and reload                                                      | review finding 1: dropping into a collapsed first pane survives storage validation and reload                                              |
+| 2 host deep-link repair            | finding 2: close/moveTo/place/replace repairs a removed secondary host deep link in one write; hidden replacement repair                        | review finding 2: closing the host-linked last secondary tab keeps the primary body visible; setter observes persisted firstActive         |
+| 3 rendered primary ownership       | finding 3: the first rendered pane preserves empty host state after structural first-leaf disappearance                                         | review finding 3: an empty host request stays empty in the first rendered pane                                                             |
+| 4 post-mutation selection          | finding 4: firstActive is resolved against the promoted post-drop primary pane; start/end split after first-pane removal                        | review finding 4: dropping the first pane into the last keeps promoted primary navigation                                                  |
+| 5 rendered equalization            | finding 5: equalize ignores non-rendered segments and dividers                                                                                  | review finding 5: double-click equalizes only visible segments after an absent middle leaf                                                 |
+| 6 lifetime ids/history             | finding 6: loaded and removed pane ids are reserved for the controller lifetime; a new pane cannot inherit the removed pane's selection history | review finding 6: a recreated split never reuses a removed migrated pane id                                                                |
+| Every-action persistence invariant | every random action keeps unique intent membership and a validating identical storage round trip                                                | 12 deterministic seeds x 120 actions, checking saved intent and validator reload after each step                                           |
+| Cached derivation                  | resize and live ratios reuse cached subtree membership and minima without reindexing                                                            | SplitLayout consumes the indexed controller projection instead of searching the effective tree; subtree metrics cache ignores empty leaves |
+
+** Recursive split specification
+
+| Specification                                                  | Named automated test / evidence                                                                                                                                                                                                                   |
+|----------------------------------------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| S1 tree intent, unlimited binary depth, global ordering        | recursive: stable reading-order tree and unassigned tabs; supports deep trees without a fixed pane count or depth cap                                                                                                                             |
+| S2 stable pane ids, fit, host selection, small API             | recursive: stable reading-order tree and unassigned tabs; deep links and per-pane history; secondary selections preserve empty host state and an exact existing deep link                                                                         |
+| S3 migrate old entries, preserve storage contract              | recursive: migrates legacy intent and rejects malformed trees; existing shared-storage/LRU tests                                                                                                                                                  |
+| S4 split any fitting target, relative edges                    | recursive: splits explicit targets and rejects a locally unfit axis; splits a collapsed subtree as the one effective hovered pane; demo nested columns and mixed edges                                                                            |
+| S5 move/reveal/stow, prune empty leaves, merge                 | recursive: pruning promotes sibling subtree with ratios intact; closing the last nested optional tab promotes its sibling subtree without losing ratios; move and merge preserve order and opened                                                 |
+| S6 memory-only history by stable pane id                       | recursive: deep links and per-pane history                                                                                                                                                                                                        |
+| S7 top-down inner-first collapse without writes                | recursive: inner cuts collapse first and exact intent restores without writes; reports the mounted root's current size before the first observer delivery                                                                                         |
+| S8 subtree-minimum resize clamps and fallback                  | recursive: divider clamps protect subtree minimums and fall back under pressure                                                                                                                                                                   |
+| S9 connected same-axis equalization, one write                 | recursive: equalizes maximal same-axis runs including divider widths; equalization stops at cross-axis boundaries and respects asymmetric subtree minima; equalization under collapse pressure centres the rendered run and retains hidden ratios |
+| S10 recursive separators, Keep instance retention              | demo nested Notes instance and draft survive moves and collapse; existing Keep tests                                                                                                                                                              |
+| S11 existing gesture, accessibility, CSS, runtime contracts    | existing drag/component/storage/input/compat suites and test:browser                                                                                                                                                                              |
+| S12 breaking API and demo documentation                        | documents recursive pane ids, subtree sizing and equalization without obsolete two-pane rules; artifact/type probes                                                                                                                               |
+| S13 no contradictory two-pane rules                            | documents recursive pane ids, subtree sizing and equalization without obsolete two-pane rules; final keyword audit                                                                                                                                |
+| S14 real nested gestures, migration, reload, captures, padding | demo recursive scenarios; demo:capture and manual Read review                                                                                                                                                                                     |
+| S15 full check and package exclusion                           | npm run check; npm pack --dry-run file list                                                                                                                                                                                                       |
+
+The demo must let a person exercise the shipped library, without duplicating its layout or gesture system.
+All acceptance runs use the built artifact, fresh browser contexts, local-only requests and real input.
+
+| Requirement                                                                                | Automated evidence (=demo/test.mjs= case unless noted)                    |
+|--------------------------------------------------------------------------------------------+---------------------------------------------------------------------------|
+| Selection; long scrollable content                                                         | selection, scrolling content, keyboard order and focus                    |
+| Keyboard reorder preserves focus and selection                                             | selection, scrolling content, keyboard order and focus                    |
+| Mouse reorder                                                                              | mouse reorder preserves selection                                         |
+| Right and bottom edge drops; direct split buttons; merge                                   | right and bottom edge splits, merge and direct split controls             |
+| Pane-to-pane drag reveals the moved tab                                                    | Notes instance and draft survive pane move and collapse/restore           |
+| Notes component instance and draft survive move, shrink, enlarge                           | Notes instance and draft survive pane move and collapse/restore           |
+| Divider pointer/keyboard resize; double-click/Enter centre                                 | divider pointer, keyboard and double-click centring                       |
+| Optional menu; close; atomic replacement                                                   | optional menu, close, replacement, and persistence across reload          |
+| Intent and effective panes survive reload                                                  | optional menu, close, replacement, and persistence across reload          |
+| External threshold/handoff to strip and edge; Escape does not open                         | external handoff into strip and edge, cancellation does not open          |
+| Real touch hold, movement and release                                                      | CDP touch long-press splits without native pointer cancellation           |
+| Per-pane split controls; drag-only toggle; inspector; reset                                | per-pane split controls, drag-only setting, inspector and reset           |
+| Nested columns and mixed axes; double-click and Enter equalize; clamps preserve inner cuts | nested columns and mixed edges; equalize thirds and subtree resize clamps |
+| Inner-first collapse, no size writes, exact tree and reload                                | nested inner-first collapse, exact restoration and reload persistence     |
+| Nested Notes DOM instance, draft and focus-outline padding                                 | nested Notes instance and draft survive moves and collapse                |
+| Last nested leaf removal by close and move                                                 | closing and moving last nested tabs promote the sibling                   |
+| Seeded pre-tree localStorage migration                                                     | legacy stored layout migrates before first render                         |
+| No runtime errors, external requests or leftover ghost                                     | every case's shared final assertions                                      |
+| Server, browser and context cleanup on success/failure                                     | =withBrowser= / per-case =finally=; closed-server assertion               |
+| No arbitrary test sleeps; first failure exits nonzero                                      | condition polling in helpers and fail-fast runner                         |
+| JS/CSS aliases exercise dist; demo strict types; Chrome 91 build                           | =demo:build=, =demo/vite.config.ts=, =demo/tsconfig.json=                 |
+| Generic pane rendering                                                                     | =App.vue= pane slot; tests locate destination by tab membership           |
+| Eight screenshots and one 10--20-second looping GIF < 3 MB                                 | =demo:capture=, size assertion, generated PNGs and GIF review frames      |
+| Existing library behavior retained except explicit specification replacements              | =npm run check=; test-only legacy fixture projection in test/helpers.ts   |
+| Demo/docs excluded from npm package                                                        | package allowlist and final =npm pack --dry-run= inspection               |
+
+Notes and Checklist keep local component state. Other cards are static and do not access external services.
+The external source ids are pre-registered optional ids; cancellation must leave them hidden, not remove their registration.
+
+** Previous verification checkpoint (superseded by independent review)
+
+The initial =npm run check= passed the counts below but did NOT cover the six
+independent-review findings. The repair ledger above and subsequent verification
+supersede that completion claim:
+
+- Unit specifications: *245 passed* across 8 files, including 15 recursive-tree
+  specifications, the empty-host/deep-link regression, the invalid-pane open
+  regression and the mounted-size-before-observer regression.
+- Strict library and demo typechecks: *PASS*.
+- Clean ESM/declaration/CSS build and emitted-artifact smoke: *PASS*.
+- Bundler consumer probe: *PASS*. NodeNext remains intentionally unsupported;
+  the probe verifies exactly the four existing Vue SFC resolution diagnostics.
+- Real library browser scenarios: *17 passed*.
+- Real demo browser scenarios: *14 passed*, including native CDP touch input.
+- =npm pack --dry-run=: *16 files*, no =demo/= or =doc/= entry.
+- LSP diagnostics: no errors in changed TypeScript/Vue files.
+- =git diff --check=: *PASS*. No dependency changes, commits, tags or publishing.
+
+The legacy two-pane fixture adapter keeps the original behavioral assertions
+while resolving action positions to stable ids and projecting tree intent onto
+the old fixture shape. The direct public-controller tree tests do not use that
+adapter. Explicit specification replacements are the old no-second-split guard,
+the ambiguous move-to-other icon, and divider centring as an implementation call
+(a lone cut still centres through =equalize=).
+
+=npm run demo:capture= regenerated eight PNGs and the GIF. Every final PNG, the
+GIF and its extracted frames/storyboard were opened with the Read tool. The
+storyboard visibly includes an unequal nested three-column layout followed by
+equal thirds and a mixed row/column layout. All browser contexts, browsers and
+loopback servers close in the scripts' =finally= blocks; the demo/capture runs
+reported successful cleanup.
+
+| Delivered image (=doc/images/=) | Bytes   |
+|---------------------------------+---------|
+| demo-single.png                 | 78707   |
+| demo-columns.png                | 135088  |
+| demo-thirds.png                 | 137493  |
+| demo-nested.png                 | 125068  |
+| demo-rows.png                   | 104705  |
+| demo-drag.png                   | 83377   |
+| demo-menu.png                   | 89488   |
+| demo-phone.png                  | 39389   |
+| demo.gif                        | 2799819 |
+
+The ignored =demo/.capture/= review frames and storyboard are retained as visual
+verification evidence; the capture script removed its recorded video. Build
+artifacts remain in ignored =dist/= and =demo/dist/= as expected.
+
+** Final independent-review repair verification
+
+All six findings were reproduced in failing direct public-controller tests.
+All six also have real-input demo scenarios: the added host-binding cases ran
+against the still-existing pre-fix emitted library first and failed with the
+reported symptoms, then passed against the rebuilt repaired library.
+
+Each piece of =npm run check= was run separately, with an explicit timeout:
+
+| Command              | Observed result                                                                  |
+|----------------------+----------------------------------------------------------------------------------|
+| npm test             | *265 passed*, 10 files                                                           |
+| npm run typecheck    | *PASS*                                                                           |
+| npm run build        | *PASS*, clean ESM, declarations and CSS                                          |
+| node test/build.mjs  | *PASS*, emitted artifact, package boundary and WebView-91 scan                   |
+| node test/types.mjs  | *PASS*, Bundler; exactly four acknowledged NodeNext SFC diagnostics              |
+| npm run test:browser | *17 passed*                                                                      |
+| npm run demo:test    | *20 passed*, including all six review scenarios                                  |
+| npm run demo:capture | *PASS*, eight PNGs and GIF regenerated and inspected with Read                   |
+| npm pack --dry-run   | *17 files*, no demo/ or doc/ entry; the additional declaration is dist/tree.d.ts |
+
+The property-style regression uses 12 deterministic seeds, 120 actions each.
+After every action it checks unique raw leaf membership, identical saved intent,
+and an identical round trip through the real storage validator. The generator
+also verifies that each mutating action category changed intent at least once,
+instead of merely exercising invalid/no-op calls.
+
+The performance regression observes *zero subtree-index rebuilds across 60
+container/live-ratio passes and a host-selection change*, then exactly one
+rebuild after committed intent changes. A structural test prevents the renderer
+from reintroducing a whole-tree lookup. This proves cache reuse, not a measured
+cross-device frame-rate claim.
+
+The earlier pressure-case assertion of 100/194px is explicitly replaced by
+finding 5: only the rendered run participates, so the two displayed segments
+are 147/147px and hidden ratios remain unchanged. No other existing behavioral
+assertion was weakened for these repairs.
+
+Latest inspected image sizes (=doc/images/=):
+
+| File             | Bytes   |
+|------------------+---------|
+| demo-single.png  | 78707   |
+| demo-columns.png | 135088  |
+| demo-thirds.png  | 137493  |
+| demo-nested.png  | 125068  |
+| demo-rows.png    | 104705  |
+| demo-drag.png    | 83377   |
+| demo-menu.png    | 89488   |
+| demo-phone.png   | 39398   |
+| demo.gif         | 2807978 |
+
+All browser contexts, browsers and loopback servers closed after successful and
+deliberately failing runs. Ignored review frames/storyboard and build outputs
+remain as verification artifacts; the recorded video was removed.

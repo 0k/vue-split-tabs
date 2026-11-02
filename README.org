@@ -9,6 +9,75 @@ and bounded per-page persistence. Components render that layout and handle
 gestures. Hosts own content, labels, routing, storage keys and themes.
 Persistent content moves through Vue Teleport without remounting.
 
+* Demo
+
+Fieldwork is an offline workspace using the public built package and stylesheet.
+Neither ~demo/~ nor ~doc/~ is shipped to npm.
+
+#+begin_src sh
+npm run demo
+#+end_src
+
+Open the URL printed by Vite. Write in Notes, drag Orbit to the right edge,
+then drag Activity to the right edge of Orbit's pane. Double-click either
+divider: all three columns become equal. Reset and split the right pane at
+its bottom edge to try mixed columns and rows. Narrow the window to collapse
+inner cuts first, then enlarge it to restore the saved tree.
+
+The recording includes a nested split and double-click equalization:
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo.gif]]
+
+** Scenarios
+
+Notes is a real textarea with component-local state and inset focus padding.
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-single.png]]
+
+Independent side-by-side content:
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-columns.png]]
+
+Three equal columns, including divider widths:
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-thirds.png]]
+
+A left column beside a right-hand top/bottom split:
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-nested.png]]
+
+Top/bottom layout and a labelled edge-drop preview:
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-rows.png]]
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-drag.png]]
+
+The + menu opens optional tabs. Checklist demonstrates atomic replacement;
+close removes an empty leaf and promotes its sibling without flattening it.
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-menu.png]]
+
+Phone-width collapse keeps the Notes instance and draft:
+
+[[https://raw.githubusercontent.com/0k/vue-split-tabs/0.2.0/doc/images/demo-phone.png]]
+
+The sidebar hands armed external pointer drags to the library. Its sources
+are pre-registered optional tabs so opened items restore on reload. The host
+owns the initial threshold/hold and source click suppression. The library
+owns targets, ghost, previews and drop handling. The toolbar hides split
+buttons for drag-only use or merges all panes. The inspector shows tree
+intent, effective panes and root fit. Reset preserves the Notes draft.
+An explicit ~?active=chart~ request demonstrates the host-active binding and
+deep links; ~?active=~ preserves an empty selection until a tab is selected.
+Host setter calls repair that explicit URL request as well as the demo state.
+~?incoming=colors~ demonstrates a genuinely absent, nonoptional sidebar source:
+the host registers it only inside the valid-drop insertion handoff.
+
+~demo/App.vue~ renders every pane through one generic slot; ~Notes.vue~ and
+~Content.vue~ own content; ~style.css~ owns the demo theme. ~browser.mjs~ owns
+the isolated loopback server, browser lifetime and real-input helpers.
+~test.mjs~ contains fail-fast acceptance; ~capture.mjs~ regenerates images.
+~acceptance.org~ maps S1–S15 and demo contracts to named tests.
+
 * Install and usage
 
 #+begin_src sh
@@ -412,10 +481,12 @@ follows the controller so measurement and rendering agree.
 * Development
 
 ~npm run check~ runs unit specifications, strict types, a clean ESM/declaration
-build, artifact smoke, consumer type probes, and pinned real-browser acceptance. Vue remains external; CSS ships
+build, artifact smoke, consumer type probes, pinned real-browser acceptance,
+and demo build/typecheck/browser acceptance. Vue remains external; CSS ships
 as an explicit export. Build clears dist first. Dependencies and the pinned
 Playwright browser must already be installed. No personal browser profile is
-used. The browser runner intercepts requests to built local artifacts. Both close
+used. The demo runner permits only its ephemeral loopback server; the library
+browser runner intercepts requests to built local artifacts. Both close
 contexts, browser and server in finally blocks, including on failure.
 
 The legacy two-pane behavioral fixtures resolve their positions to public
@@ -425,7 +496,17 @@ replaced single-split guard, move-to-other controls and divider-centre action.
 
 | Command | Purpose |
 |---------+---------|
+| ~npm run demo~ | Build library and serve playground |
+| ~npm run demo:build~ | Build and typecheck demo against emitted declarations |
+| ~npm run demo:test~ | Build demo and run real-input acceptance |
+| ~npm run demo:capture~ | Regenerate README PNGs and looping GIF |
 | ~npm pack --dry-run~ | Inspect package contents without publishing |
+
+Captures use fixed viewports, fresh storage, local fonts and no network
+services. ~FFMPEG~ overrides the ffmpeg executable. The GIF must stay below
+3 MB. Review every PNG and extracted GIF frame in ~demo/.capture/~ before
+accepting captures. The capture script removes its video; review frames are
+ignored and may be removed after inspection. Demo dist and caches are ignored.
 
 Releases use the ~pkg~ workflow: ~package.json~ keeps ~%%version%%~ for tag
 substitution; README.md is generated from this Org source at release, never

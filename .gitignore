@@ -4,3 +4,6 @@ dist/
 /.pkg/
 AGENTS.local.md
 CLAUDE.local.md
+/demo/dist/
+/demo/.vite/
+/demo/.capture/

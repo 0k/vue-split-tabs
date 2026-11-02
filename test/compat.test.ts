@@ -31,6 +31,8 @@ describe("compatibility and packaging", () => {
     for (const api of ["Breaking changes from 0.1.x", "pane.id", "intent.tree", "equalize(cutId)", "pane.fits"]) {
       expect(docs, `Expected recursive API documentation: ${api}`).toContain(api);
     }
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
+    expect(pkg.files, "Expected package allowlist to exclude demo and documentation assets").toEqual(["dist", "README.md", "LICENSE"]);
   });
 
   it("Pandoc-rendered README preserves every stylesheet variable's double hyphen", (context) => {
