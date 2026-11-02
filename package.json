@@ -22,7 +22,7 @@
   },
   "publishConfig": { "access": "public" },
   "scripts": {
-    "prepack": "npm run build",
+    "prepare": "npm run build",
     "test": "vitest run --bail 1 --configLoader runner --cache false",
     "test:browser": "node test/browser.mjs",
     "typecheck": "vue-tsc --noEmit",
