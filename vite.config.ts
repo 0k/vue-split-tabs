@@ -15,7 +15,6 @@ export default defineConfig({
     rollupOptions: {
       external: ["vue"],
     },
-    sourcemap: true,
   },
   test: { environment: "jsdom", setupFiles: ["./test/setup.ts"] },
 });

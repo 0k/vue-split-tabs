@@ -59,7 +59,7 @@ const declarations = readFileSync(resolve("dist/controller.d.ts"), "utf8");
 assert.doesNotMatch(readFileSync(resolve("dist/index.d.ts"), "utf8"), /import\s*["'][^"']*\.css/);
 assert.equal(readFileSync(resolve("dist/style.css"), "utf8"), readFileSync(resolve("src/style.css"), "utf8"));
 const expectedFiles = [
-  "index.js", "index.js.map", "index.d.ts", "style.css", "controller.d.ts", "context.d.ts", "drag.d.ts", "tree.d.ts",
+  "index.js", "index.d.ts", "style.css", "controller.d.ts", "context.d.ts", "drag.d.ts", "tree.d.ts",
   "SplitPane.vue.d.ts", "SplitLayout.vue.d.ts", "SplitTabs.vue.d.ts", "SplitTabsAnchor.vue.d.ts", "SplitTabsKeep.vue.d.ts", "SplitTabStrip.vue.d.ts",
 ];
 assert.deepEqual(readdirSync(resolve("dist")).sort(), expectedFiles.sort());
