@@ -7,9 +7,14 @@ export default defineConfig({
   plugins: [vue()],
   resolve: { alias: [
     { find: "@0k/vue-split-tabs/style.css", replacement: fileURLToPath(new URL("../dist/style.css", import.meta.url)) },
+    { find: "@0k/vue-split-tabs/frame", replacement: fileURLToPath(new URL("../dist/frame.js", import.meta.url)) },
     { find: "@0k/vue-split-tabs", replacement: fileURLToPath(new URL("../dist/index.js", import.meta.url)) },
   ] },
   cacheDir: ".vite",
   server: { host: "127.0.0.1", fs: { allow: [fileURLToPath(new URL("..", import.meta.url))] } },
-  build: { target: "chrome91", outDir: "dist", emptyOutDir: true },
+  build: { target: "chrome91", outDir: "dist", emptyOutDir: true,
+    rollupOptions: { input: {
+      main: fileURLToPath(new URL("index.html", import.meta.url)), pane: fileURLToPath(new URL("pane.html", import.meta.url)),
+    } },
+  },
 });

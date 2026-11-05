@@ -8,9 +8,9 @@ export default defineConfig({
     emptyOutDir: false,
     target: "chrome91",
     lib: {
-      entry: resolve(import.meta.dirname, "src/index.ts"),
+      entry: { index: resolve(import.meta.dirname, "src/index.ts"), frame: resolve(import.meta.dirname, "src/frame.ts") },
       formats: ["es"],
-      fileName: () => "index.js",
+      fileName: (_format, name) => `${name}.js`,
     },
     rollupOptions: {
       external: ["vue"],

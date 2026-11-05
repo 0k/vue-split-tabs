@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import type { Orientation, SplitSide } from "./controller.js";
+import type { Orientation } from "./model.js";
 
-defineProps<{ kind: "split" | "move" | "close"; orientation?: Orientation; side?: SplitSide }>();
+defineProps<{ kind: "split" | "move" | "close"; orientation?: Orientation; side?: "start" | "end" }>();
 </script>
 
 <template>

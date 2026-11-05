@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <style>html, body { margin: 0; height: 100%; } button { margin: 24px; }</style>
+</head>
+<body>
+<button id="inside" type="button">Focus inside iframe</button>
+<input id="frame-input" aria-label="Frame typing">
+<script type="module">
+  import { connectSplitTabsFrame } from "/dist/frame.js";
+  const id = new URLSearchParams(location.search).get("id");
+  window.marker = `${id}:${Math.random()}`;
+  window.loadCount = parent.frameLoads[id] = (parent.frameLoads[id] || 0) + 1;
+  window.claims = [];
+  window.keys = [];
+  window.clicks = 0;
+  window.addEventListener("click", () => { window.clicks++; }, true);
+  if (new URLSearchParams(location.search).get("scroll") === "1") {
+    document.body.append(Object.assign(document.createElement("div"), { style: "height: 3000px", textContent: "tall" }));
+  }
+  window.addEventListener("keydown", event => window.keys.push(event.key), true);
+  window.identified = false;
+  window.addEventListener("message", event => {
+    if (event.origin === location.origin && event.data?.["split-tabs"] === 1 && event.data.type === "identify") {
+      window.identified = typeof event.data.token === "string" && event.data.token.length > 0;
+      window.exitKeys = event.data.exitKeys ?? [];
+    }
+  });
+  window.addEventListener("split-tabs-claimed", event => window.claims.push(event.detail.what));
+  const blockers = new Set();
+  const add = window.addEventListener, remove = window.removeEventListener;
+  window.addEventListener = function(type, listener, options) {
+    if (["touchstart", "touchmove"].includes(type) && options?.passive === false) blockers.add(listener);
+    return add.call(this, type, listener, options);
+  };
+  window.removeEventListener = function(type, listener, options) {
+    if (["touchstart", "touchmove"].includes(type)) blockers.delete(listener);
+    return remove.call(this, type, listener, options);
+  };
+  window.touchBlockers = () => blockers.size;
+  window.disconnectFrame = connectSplitTabsFrame();
+  window.ready = true;
+</script>
+</body>
+</html>

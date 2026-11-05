@@ -18,14 +18,15 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./frame": { "types": "./dist/frame.d.ts", "default": "./dist/frame.js" },
     "./style.css": "./dist/style.css"
   },
   "publishConfig": { "access": "public" },
   "scripts": {
     "prepare": "npm run build",
     "test": "vitest run --bail 1 --configLoader runner --cache false",
-    "test:browser": "node test/browser.mjs",
-    "typecheck": "vue-tsc --noEmit",
+    "test:browser": "node test/browser.mjs && node test/browser-random.mjs",
+    "typecheck": "vue-tsc --noEmit && tsc --noEmit",
     "build": "node scripts/build.mjs clean && vue-tsc -p tsconfig.build.json && vite build --configLoader runner && node scripts/build.mjs css",
     "demo": "npm run build && vite --configLoader runner --config demo/vite.config.ts --host 127.0.0.1",
     "demo:build": "npm run build && vue-tsc --noEmit -p demo/tsconfig.json && vite build --configLoader runner --config demo/vite.config.ts",
@@ -33,7 +34,7 @@
     "demo:capture": "npm run demo:build && node demo/capture.mjs",
     "check": "npm run test && npm run typecheck && npm run build && node test/build.mjs && node test/types.mjs && npm run test:browser && npm run demo:test"
   },
-  "peerDependencies": { "vue": "^3.5.0" },
+  "peerDependencies": { "vue": "^3.5.3" },
   "devDependencies": {
     "@types/node": "22.10.5",
     "@vitejs/plugin-vue": "5.2.4",

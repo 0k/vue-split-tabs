@@ -1,5 +1,7 @@
 {
   "extends": "../tsconfig.json",
-  "compilerOptions": { "types": ["node"], "paths": { "@0k/vue-split-tabs": ["../dist/index.d.ts"] } },
+  "compilerOptions": { "types": ["node"], "paths": {
+    "@0k/vue-split-tabs": ["../dist/index.d.ts"], "@0k/vue-split-tabs/frame": ["../dist/frame.d.ts"]
+  } },
   "include": ["./*.ts", "./*.vue"]
 }

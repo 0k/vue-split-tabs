@@ -1,1147 +1,681 @@
+// Specification of the controller: host tabs, placeholders, persistence,
+// host binding, size collapse, undo and zoom around the layout algebra.
 import { describe, expect, it, vi } from "vitest";
-import { ref } from "vue";
-import { createSplitTabsController, type Orientation } from "../src/index";
-import { controller, storage, type PaneIndex } from "./helpers";
+import { nextTick, ref } from "vue";
+import { createSplitTabsController, notation, type LayoutNode, type SplitTabsOptions, type SplitTabsStorage } from "../src/index";
 
-// Insertion acceptance ledger: present-only guards, exact-slot reveal in either
-// pane, visible-id place/splitAt equivalence, four split edges, one-tab incoming
-// split eligibility, persistence, history and exactly one write per insertion.
-describe("controller insertion", () => {
-  it.each([0, 1] as const)("opens a hidden optional tab at a chosen slot in pane %i with one write", (pane) => {
-    const s = storage();
-    const c = controller({ optional: ["c"], storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    s.setItem.mockClear();
-    c.insert("c", pane, pane === 0 ? "d" : "b");
-    expect(c.panes.value.map((p) => p.tabs)).toEqual(pane === 0 ? [["a", "c", "d"], ["b"]] : [["a", "d"], ["c", "b"]]);
-    expect(c.panes.value.map((p) => p.active)).toEqual(pane === 0 ? ["c", "b"] : ["a", "c"]);
-    expect(c.opened.value).toEqual(["c"]);
-    expect(c.intent.value.second).toEqual(pane === 0 ? ["b"] : ["b", "c"]);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-    c.dispose();
-    const loaded = controller({ optional: ["c"], storage: s });
-    loaded.setContainerSize(606, 406);
-    expect(loaded.panes.value.map((p) => p.tabs)).toEqual(c.panes.value.map((p) => p.tabs));
-    expect(loaded.opened.value).toEqual(["c"]);
-    loaded.dispose();
+function memoryStorage() {
+  const values = new Map<string, string>();
+  return {
+    values,
+    getItem: vi.fn((key: string) => values.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => { values.set(key, value); }),
+    removeItem: vi.fn((key: string) => { values.delete(key); }),
+  } satisfies SplitTabsStorage & { values: Map<string, string> };
+}
+type MemoryStorage = ReturnType<typeof memoryStorage>;
+function make(overrides: Partial<Omit<SplitTabsOptions, "storage">> & { storage?: MemoryStorage } = {}, size: [number, number] = [1000, 800]) {
+  const storage = overrides.storage ?? memoryStorage();
+  const c = createSplitTabsController({
+    tabs: ["a", "b", "c", "d"], entryKey: "page", storageKey: "layouts",
+    minPaneWidth: 100, minPaneHeight: 80, placeholderPrefix: "new:", ...overrides, storage,
   });
+  c.setContainerSize(...size);
+  return { c, storage };
+}
+type Controller = ReturnType<typeof make>["c"];
+const writes = (s: MemoryStorage) => s.setItem.mock.calls.length;
+const stored = (s: MemoryStorage) => JSON.parse(s.values.get("layouts")!) as { entries: { key: string; stamp: number }[] };
+const pane = (c: Controller, view: string) => c.paneOf(view)!;
+const splitOff = (c: Controller, view: string, beside: string, side: "left" | "right" | "top" | "bottom") =>
+  c.move({ view }, { kind: "split", target: pane(c, beside), side });
 
-  it("inserts at the end in single layout and learns primary history", () => {
-    const s = storage();
-    const c = controller({ optional: ["b"], storage: s });
-    c.select(0, "d");
-    s.setItem.mockClear();
-    c.insert("b", 0, null);
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a", "c", "d", "b"], active: "b" }]);
-    expect(c.intent.value.firstActive).toBe("b");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-    c.close("b");
-    expect(c.panes.value[0]?.active).toBe("d");
-  });
-
-  it("shows a newly inserted pane-1 tab even when the host currently deep-links another tab there", () => {
-    const s = storage();
-    const value = ref("a");
-    const set = vi.fn((id: string) => { value.value = id; });
-    const c = controller({ optional: ["c"], storage: s, active: { get: () => value.value, set } });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    value.value = "b";
-    s.setItem.mockClear();
-    c.insert("c", 1, null);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
-    expect(c.intent.value.firstActive).toBe("a");
-    expect(set).toHaveBeenCalledExactlyOnceWith("a");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it("inserting an already-visible id has place semantics, not focus-only open semantics", () => {
-    const s = storage();
-    const c = controller({ storage: s });
-    c.insert("c", 0, "a");
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["c", "a", "b", "d"], active: "a" }]);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    s.setItem.mockClear();
-    c.insert("c", 1, "b");
-    expect(c.panes.value[1]).toEqual({ index: 1, tabs: ["c", "b"], active: "c" });
-    expect(c.opened.value).toEqual([]);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["rows", "cols"] as const)("opens a hidden incoming id into either side of a %s split in one write", (o) => {
-    for (const side of ["start", "end"] as const) {
-      const s = storage();
-      const c = controller({ tabs: ["a", "b"], optional: ["b"], storage: s });
-      c.setContainerSize(606, 406);
-      c.commitRatio(0.7);
-      s.setItem.mockClear();
-      c.insertSplit("b", o, side);
-      expect(c.orientation.value).toBe(o);
-      expect(c.panes.value.map((p) => p.tabs)).toEqual(side === "start" ? [["b"], ["a"]] : [["a"], ["b"]]);
-      expect(c.panes.value.map((p) => p.active)).toEqual(side === "start" ? ["b", "a"] : ["a", "b"]);
-      expect(c.opened.value).toEqual(["b"]);
-      expect(c.intent.value.ratio).toBe(0.5);
-      expect(s.setItem).toHaveBeenCalledTimes(1);
-      c.dispose();
-    }
-  });
-
-  it("splits an already-visible incoming id like splitAt without duplicating it", () => {
-    const s = storage();
-    const c = controller({ storage: s });
-    c.setContainerSize(606, 406);
-    c.insertSplit("c", "cols", "start");
-    expect(c.panes.value.map((p) => p.tabs)).toEqual([["c"], ["a", "b", "d"]]);
-    expect(c.opened.value).toEqual([]);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects absent ids, invalid slots/axes/sides and insufficient fits without opening or writing", () => {
-    const s = storage();
-    const c = controller({ optional: ["b"], storage: s });
-    c.insert("missing", 0, null);
-    c.insert("b", 1, null);
-    c.insert("b", 0, "b");
-    c.insert("b", 0, "missing");
-    c.insert("b", 3 as PaneIndex, null);
-    c.insertSplit("b", "cols", "end");
-    c.setContainerSize(606, 406);
-    c.insertSplit("missing", "cols", "end");
-    c.insertSplit("b", "bad" as Orientation, "end");
-    c.insertSplit("b", "cols", "bad" as "end");
-    expect(c.opened.value).toEqual([]);
-    expect(s.setItem).not.toHaveBeenCalled();
-    const empty = controller({ tabs: ["b"], optional: ["b"], storage: s });
-    empty.setContainerSize(606, 406);
-    empty.insertSplit("b", "rows", "end");
-    expect(empty.isSplit.value).toBe(false);
-    expect(s.setItem).not.toHaveBeenCalled();
-  });
-});
-
-// Acceptance ledger: on-demand visibility/counting, atomic placement/focus/close,
-// pane history and last-tab merges, per-entry persistence/legacy loading,
-// absent-id retention, reactive inputs without writes, and readonly exposure.
-describe("on-demand tabs", () => {
-  it("keeps every present tab visible when optional is omitted", () => {
-    const c = controller();
-    expect(c.panes.value[0]?.tabs).toEqual(["a", "b", "c", "d"]);
-    expect(c.opened.value).toEqual([]);
-    expect(c.isOptional("b")).toBe(false);
-    c.close("b");
-    expect(c.panes.value[0]?.tabs).toEqual(["a", "b", "c", "d"]);
-  });
-
-  it("hides optional tabs from membership, split eligibility and restored selection", () => {
-    const s = storage();
-    s.values.set("layouts", JSON.stringify({ entries: [{ key: "page", stamp: 1, intent: {
-      orientation: "cols", firstActive: "b", order: [], second: ["c"], secondActive: "c", ratio: 0.5,
-    } }] }));
-    const c = controller({ storage: s, optional: ["b", "c", "d"] });
-    c.setContainerSize(606, 406);
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a"], active: "a" }]);
-    expect(c.paneOf("b")).toBeNull();
-    expect(c.canOfferSplit.value).toBe(false);
-    expect(c.restoredActive.value).toBe("");
-    const writes = s.setItem.mock.calls.length;
-    c.split("b", "cols");
-    expect(c.isSplit.value).toBe(false);
-    expect(s.setItem).toHaveBeenCalledTimes(writes);
-  });
-
-  it.each([0, 1] as const)("opens into unsplit pane %i at the end and shows it in one write", (pane) => {
-    const s = storage();
-    const value = ref("a");
-    const set = vi.fn((id: string) => { value.value = id; });
-    const c = controller({ optional: ["b"], storage: s, active: { get: () => value.value, set } });
-    c.place("d", 0, "a");
-    const writes = s.setItem.mock.calls.length;
-    c.open("b", pane);
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["d", "a", "c", "b"], active: "b" }]);
-    expect(c.intent.value.opened).toEqual(["b"]);
-    expect(c.intent.value.firstActive).toBe("b");
-    expect(c.opened.value).toEqual(["b"]);
-    expect(set).toHaveBeenCalledExactlyOnceWith("b");
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-    c.close("b");
-    expect(c.panes.value[0]?.active).toBe("a");
-  });
-
-  it("opens at the end of pane 1 and focuses an existing tab there without moving it", () => {
-    const s = storage();
-    const c = controller({ optional: ["c", "d"], storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.open("c", 1);
-    c.open("d", 1);
-    expect(c.panes.value).toEqual([
-      { index: 0, tabs: ["a"], active: "a" }, { index: 1, tabs: ["b", "c", "d"], active: "d" },
-    ]);
-    const membership = [...c.intent.value.second];
-    const writes = s.setItem.mock.calls.length;
-    c.open("c", 0);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
-    expect(c.intent.value.second).toEqual(membership);
-    expect(c.paneOf("c")).toBe(c.panes.value[1]?.id);
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-    c.open("a", 1);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
-    expect(c.intent.value.second).toEqual(membership);
-  });
-
-  it("clears lingering pane-1 membership when opening into pane 0", () => {
-    const c = controller({ optional: ["c"] });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.open("c", 1);
-    c.close("c");
-    c.open("c", 0);
-    expect(c.panes.value).toEqual([
-      { index: 0, tabs: ["a", "d", "c"], active: "c" }, { index: 1, tabs: ["b"], active: "b" },
-    ]);
-    expect(c.intent.value.second).not.toContain("c");
-  });
-
-  it("ignores non-present opens and non-optional, absent or already-closed closes", () => {
-    const s = storage();
-    const c = controller({ optional: ["b", "missing"], storage: s });
-    const before = c.intent.value;
-    c.open("missing", 0);
-    c.close("missing");
-    c.close("b");
-    c.close("a");
-    expect(c.intent.value).toEqual(before);
-    expect(s.setItem).not.toHaveBeenCalled();
-  });
-
-  it.each([0, 1] as const)("closing the shown tab in pane %i uses its previously viewed tab", (pane) => {
-    const s = storage();
-    const c = controller({ optional: ["c", "d"], storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.open("c", pane);
-    c.open("d", pane);
-    c.select(pane, "c");
-    const order = [...c.intent.value.order];
-    const writes = s.setItem.mock.calls.length;
-    c.close("c");
-    expect(c.panes.value[pane]?.active).toBe("d");
-    expect(c.intent.value.order).toEqual(order);
-    expect(c.intent.value.opened).toEqual(["d"]);
-    expect(c.paneOf("c")).toBeNull();
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-  });
-
-  it.each([0, 1] as const)("closing the last tab of pane %i merges and keeps the other shown tab", (pane) => {
-    const s = storage();
-    const c = controller({ tabs: ["a", "b"], optional: ["b"], storage: s });
-    c.open("b", 0);
-    c.setContainerSize(606, 406);
-    c.splitAt("b", "cols", pane === 0 ? "start" : "end");
-    c.commitRatio(0.6);
-    c.setRatioLive(0.7);
-    const writes = s.setItem.mock.calls.length;
-    c.close("b");
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a"], active: "a" }]);
-    expect(c.intent.value.orientation).toBeNull();
-    expect(c.intent.value.second).toEqual([]);
-    expect(c.intent.value.secondActive).toBe("");
-    expect(c.ratio.value).toBe(0.6);
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-  });
-
-  it("closing an inactive tab preserves both shown tabs", () => {
-    const c = controller({ optional: ["c"] });
-    c.setContainerSize(606, 406);
-    c.split("b", "rows");
-    c.open("c", 0);
-    c.select(0, "d");
-    c.close("c");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["d", "b"]);
-  });
-
-  it("persists opened per entry, retains absent ids, and never writes for reactive tab/optional/size changes", () => {
-    const s = storage();
-    const tabs = ref(["a", "b", "c"]);
-    const optional = ref(["b", "c"]);
-    const key = ref("one");
-    const c = controller({ tabs, optional: () => optional.value, storage: s, entryKey: key });
-    c.open("b", 0);
-    const writes = s.setItem.mock.calls.length;
-    tabs.value = ["a", "c"];
-    expect(c.opened.value).toEqual([]);
-    expect(c.intent.value.opened).toEqual(["b"]);
-    optional.value = ["b"];
-    expect(c.panes.value[0]?.tabs).toEqual(["a", "c"]);
-    tabs.value = ["a", "b", "c"];
-    expect(c.opened.value).toEqual(["b"]);
-    c.setContainerSize(606, 406);
-    c.setContainerSize(100, 100);
-    expect(s.setItem).toHaveBeenCalledTimes(writes);
-    key.value = "two";
-    expect(c.opened.value).toEqual([]);
-    c.open("b", 0);
-    c.close("b");
-    key.value = "one";
-    expect(c.opened.value).toEqual(["b"]);
-    c.dispose();
-    const loaded = controller({ tabs, optional, storage: s, entryKey: "one" });
-    expect(loaded.opened.value).toEqual(["b"]);
-    loaded.dispose();
-  });
-
-  it("exposes readonly opened optional ids in effective order", () => {
-    const c = controller({ optional: ["b", "d"] });
-    c.open("d", 0);
-    c.open("b", 0);
-    expect(c.opened.value).toEqual(["d", "b"]);
-    c.place("b", 0, "d");
-    expect(c.opened.value).toEqual(["b", "d"]);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    Reflect.set(c.opened.value, 0, "a");
-    expect(c.opened.value).toEqual(["b", "d"]);
-    expect(warn).toHaveBeenCalled();
-  });
-
-  it("defaults internal selection to the first visible tab, not a hidden optional tab", () => {
-    const c = controller({ tabs: ["b", "a"], optional: ref(["b"]) });
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a"], active: "a" }]);
-    expect(controller({ tabs: ["b"], optional: ["b"] }).panes.value)
-      .toEqual([{ index: 0, tabs: [], active: "" }]);
-  });
-
-  it("closing after reload uses the order neighbour without history and cannot restore the closed id", () => {
-    const s = storage();
-    const c = controller({ optional: ["b"], storage: s });
-    c.open("b", 0);
-    c.place("b", 0, "c");
-    c.setContainerSize(606, 406);
-    c.split("d", "cols");
-    c.dispose();
-    const loaded = controller({ optional: ["b"], storage: s, active: { get: () => "b", set: vi.fn() } });
-    loaded.setContainerSize(606, 406);
-    loaded.close("b");
-    expect(loaded.intent.value.firstActive).toBe("c");
-    expect(loaded.panes.value[0]?.active).not.toBe("b");
-    loaded.dispose();
-    const reloaded = controller({ optional: ["b"], storage: s });
-    expect(reloaded.restoredActive.value).toBe("c");
-    expect(reloaded.paneOf("b")).toBeNull();
-    reloaded.dispose();
-  });
-});
-
-// Replacement acceptance ledger: exact slot/membership/opened swap in both panes,
-// inactive sources, focus-existing without moving (same/other pane), history fallback,
-// empty-pane merges/live-ratio cleanup, invalid-input no-ops, persistence and one write.
-describe("controller replace", () => {
-  it.each([0, 1] as const)("replaces a shown placeholder in pane %i in its exact ordered slot in one write", (pane) => {
-    const s = storage();
-    const c = controller({ tabs: ["a", "b", "c", "new", "chosen"], optional: ["new", "chosen"], storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.open("new", pane);
-    if (pane === 0) c.place("new", 0, "c");
-    const order = [...c.intent.value.order].filter((id) => id !== "chosen").map((id) => id === "new" ? "chosen" : id);
-    s.setItem.mockClear();
-    c.replace("new", "chosen");
-    expect(c.intent.value.order).toEqual(order);
-    expect(c.panes.value[pane]?.tabs).toEqual(pane === 0 ? ["a", "chosen", "c"] : ["b", "chosen"]);
-    expect(c.paneOf("chosen")).toBe(c.panes.value[pane]?.id);
-    expect(c.paneOf("new")).toBeNull();
-    expect(c.panes.value.map((p) => p.active)).toEqual(pane === 0 ? ["chosen", "b"] : ["a", "chosen"]);
-    expect(c.intent.value.second).toEqual(pane === 0 ? ["b"] : ["b", "chosen"]);
-    expect(c.intent.value.opened).toEqual(["chosen"]);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([0, 1] as const)("replaces an inactive placeholder in pane %i without changing shown tabs", (pane) => {
-    const s = storage();
-    const c = controller({ tabs: ["a", "b", "c", "new", "chosen"], optional: ["new", "chosen"], storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "rows");
-    c.open("new", pane);
-    c.select(pane, pane === 0 ? "c" : "b");
-    const shown = c.panes.value.map((p) => p.active);
-    s.setItem.mockClear();
-    c.replace("new", "chosen");
-    expect(c.panes.value.map((p) => p.active)).toEqual(shown);
-    expect(c.paneOf("chosen")).toBe(c.panes.value[pane]?.id);
-    expect(c.opened.value).toEqual(["chosen"]);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([0, 1] as const)("focuses an already-visible tab in the same pane %i without moving it", (pane) => {
-    const s = storage();
-    const c = controller({ tabs: ["a", "b", "c", "new"], optional: ["new"], storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.open("new", pane);
-    const newId = pane === 0 ? "a" : "b";
-    const order = [...c.intent.value.order];
-    s.setItem.mockClear();
-    c.replace("new", newId);
-    expect(c.panes.value.map((p) => p.tabs)).toEqual([["a", "c"], ["b"]]);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "b"]);
-    expect(c.intent.value.order).toEqual(order);
-    expect(c.intent.value.second).toEqual(["b"]);
-    expect(c.opened.value).toEqual([]);
-    expect(c.paneOf(newId)).toBe(c.panes.value[pane]?.id);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([0, 1] as const)("focuses the other pane while replacing pane %i's shown placeholder with its recent tab", (pane) => {
-    const s = storage();
-    const c = controller({ tabs: ["a", "b", "c", "d", "new"], optional: ["new"], storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.moveTo("d", 1);
-    c.select(pane, pane === 0 ? "c" : "d");
-    c.open("new", pane);
-    const newId = pane === 0 ? "d" : "c";
-    const membership = [...c.intent.value.second].filter((id) => id !== "new");
-    const order = [...c.intent.value.order];
-    s.setItem.mockClear();
-    c.replace("new", newId);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "d"]);
-    expect(c.paneOf(newId)).toBe(c.panes.value[pane === 0 ? 1 : 0]?.id);
-    expect(c.intent.value.second).toEqual(membership);
-    expect(c.intent.value.order).toEqual(order);
-    expect(c.paneOf("new")).toBeNull();
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([0, 1] as const)("merges when the placeholder is the only tab of pane %i, then focuses the existing target", (pane) => {
-    const s = storage();
-    const c = controller({ tabs: ["a", "b", "new"], optional: ["new"], storage: s });
-    c.open("new", 0);
-    c.setContainerSize(606, 406);
-    c.splitAt("new", "cols", pane === 0 ? "start" : "end");
-    c.commitRatio(0.6);
-    c.setRatioLive(0.7);
-    s.setItem.mockClear();
-    c.replace("new", "b");
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a", "b"], active: "b" }]);
-    expect(c.intent.value.second).toEqual([]);
-    expect(c.intent.value.orientation).toBeNull();
-    expect(c.intent.value.secondActive).toBe("");
-    expect(c.intent.value.firstActive).toBe("b");
-    expect(c.ratio.value).toBe(0.6);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it("focuses an existing optional target without forgetting its open state", () => {
-    const s = storage();
-    const c = controller({ optional: ["b", "c"], storage: s });
-    c.open("b", 0);
-    c.open("c", 0);
-    s.setItem.mockClear();
-    c.replace("c", "b");
-    expect(c.opened.value).toEqual(["b"]);
-    expect(c.panes.value[0]?.active).toBe("b");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([false, true])("replaces a host-deep-linked pane-1 placeholder with an %s existing target", (existing) => {
-    const s = storage();
-    const active = ref("a");
-    const set = vi.fn((id: string) => { active.value = id; });
-    const c = controller({ tabs: ["a", "b", "new", "chosen"], optional: ["new", "chosen"], storage: s,
-      active: { get: () => active.value, set },
-    });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    if (existing) c.open("chosen", 1);
-    c.open("new", 1);
-    active.value = "new";
-    set.mockClear();
-    s.setItem.mockClear();
-    c.replace("new", "chosen");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "chosen"]);
-    expect(c.paneOf("chosen")).toBe(c.panes.value[1]?.id);
-    expect(c.paneOf("new")).toBeNull();
-    expect(set).toHaveBeenCalledExactlyOnceWith("a");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it("updates intent before calling the host setter, so primary replacement records one coherent selection", () => {
-    const s = storage();
-    const active = ref("a");
-    const observed: string[] = [];
-    const c = controller({ optional: ["b", "c"], storage: s, active: {
-      get: () => active.value,
-      set: (id) => {
-        const saved = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { intent: { firstActive: string } }[] };
-        observed.push(saved.entries[0]?.intent.firstActive ?? "");
-        active.value = id;
-      },
-    } });
-    c.open("b", 0);
-    observed.length = 0;
-    s.setItem.mockClear();
-    c.replace("b", "c");
-    expect(observed).toEqual(["c"]);
-    expect(c.panes.value[0]?.active).toBe("c");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-  });
-
-  it("clears stale target membership, transfers the slot and persists replacement across re-creation", () => {
-    const s = storage();
-    const options = { tabs: ["a", "b", "new", "chosen"], optional: ["new", "chosen"], storage: s };
-    const c = controller(options);
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.open("chosen", 1);
-    c.close("chosen");
-    c.open("new", 0);
-    c.place("new", 0, "a");
-    s.setItem.mockClear();
-    c.replace("new", "chosen");
-    expect(c.intent.value.order).toEqual(["chosen", "a", "b"]);
-    expect(c.intent.value.second).toEqual(["b"]);
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-    c.dispose();
-    const restored = controller(options);
-    restored.setContainerSize(606, 406);
-    expect(restored.opened.value).toEqual(["chosen"]);
-    expect(restored.intent.value.order).toEqual(["chosen", "a", "b"]);
-    expect(restored.panes.value.map((p) => p.tabs)).toEqual([["chosen", "a"], ["b"]]);
-    expect(restored.restoredActive.value).toBe("chosen");
-    restored.dispose();
-  });
-
-  it.each([["missing", "b"], ["c", "b"], ["b", "missing"], ["b", "b"]])("ignores replacement %s -> %s", (oldId, newId) => {
-    const s = storage();
-    const c = controller({ optional: ["c"], storage: s });
-    const value = c.intent.value;
-    c.replace(oldId, newId);
-    expect(c.intent.value).toEqual(value);
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a", "b", "d"], active: "a" }]);
-    expect(s.setItem).not.toHaveBeenCalled();
-  });
-});
-
-describe("controller", () => {
-  it("defaults to the first tab and supports an empty list", () => {
-    const c = controller();
-    expect(c.panes.value).toEqual([{ index: 0, tabs: ["a", "b", "c", "d"], active: "a" }]);
-    expect(controller({ tabs: [] }).panes.value).toEqual([{ index: 0, tabs: [], active: "" }]);
-    expect(c.orientation.value).toBeNull();
-    expect(c.paneOf("missing")).toBeNull();
-  });
-
-  it("passes empty host selection through without settling it", () => {
-    const value = ref("");
-    const set = vi.fn((id: string) => { value.value = id; });
-    const c = controller({ active: { get: () => value.value, set } });
-    c.setContainerSize(500, 500);
-    c.split("b", "rows");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["", "b"]);
-    expect(set).not.toHaveBeenCalled();
-  });
-
-  it("uses inclusive fit thresholds and neither orientation when unmeasured", () => {
-    const c = controller();
-    expect(c.fits.value).toEqual({ rows: false, cols: false });
-    expect(c.canOfferSplit.value).toBe(false);
-    c.setContainerSize(205, 165);
-    expect(c.fits.value).toEqual({ rows: false, cols: false });
-    c.setContainerSize(206, 166);
-    expect(c.fits.value).toEqual({ rows: true, cols: true });
-    expect(c.canOfferSplit.value).toBe(true);
-    expect(controller({ tabs: ["a"] }).canOfferSplit.value).toBe(false);
-  });
-
-  it("derives layout without writes and retains absent ids and natural order", () => {
-    const s = storage();
-    const tabs = ref(["a", "b", "c", "d"]);
-    const c = controller({ storage: s, tabs: () => tabs.value });
+describe("host tabs and implicit placement", () => {
+  it("refused external insert never registers, changes the tree or writes storage", () => {
+    const tabs = ref(["a", "b"]);
+    const { c, storage } = make({ tabs }, [150, 400]);
+    const before = JSON.stringify(c.intent.value);
+    const register = vi.fn(() => { tabs.value.push("x"); });
+    expect(c.insert("x", { kind: "split", target: c.panes.value[0]!.id, side: "right" }, register))
+      .toEqual({ ok: false, reason: "no-room" });
+    expect(register).not.toHaveBeenCalled();
+    expect(JSON.stringify(c.intent.value)).toBe(before);
+    expect(c.notation.value).toBe("(*a b)");
+    expect(writes(storage)).toBe(0);
     c.setContainerSize(600, 400);
-    c.split("c", "cols");
-    c.moveTo("a", 1);
-    expect(c.panes.value.map((p) => p.tabs)).toEqual([["b", "d"], ["a", "c"]]);
-    const writes = s.setItem.mock.calls.length;
-    c.setContainerSize(205, 400);
-    expect(c.panes.value[0]?.tabs).toEqual(tabs.value);
-    expect(c.orientation.value).toBeNull();
-    tabs.value = ["b", "d"];
-    c.setContainerSize(600, 400);
-    expect(c.isSplit.value).toBe(false);
-    expect(c.intent.value.second).toEqual(["c", "a"]);
-    tabs.value = ["d", "c", "b", "a"];
-    expect(c.panes.value.map((p) => p.tabs)).toEqual([["d", "b"], ["c", "a"]]);
-    expect(s.setItem).toHaveBeenCalledTimes(writes);
-    c.dispose();
+    expect(c.insert("x", { kind: "split", target: c.panes.value[0]!.id, side: "right" }, register).ok).toBe(true);
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(c.notation.value).toBe("H[(*a b) x]");
+    expect(writes(storage)).toBe(1);
+  });
+  it("starts as one pane holding every visible host tab in natural order, without writing", () => {
+    const { c, storage } = make({ optional: ["d"] });
+    expect(c.notation.value).toBe("(*a b c)");
+    expect(c.panes.value[0]).toMatchObject({ tabs: ["a", "b", "c"], active: "a", view: "a", showsBar: true, collapsed: false });
+    expect(writes(storage)).toBe(0);
   });
 
-  it("guards split and chooses next then previous neighbors", () => {
-    const c = controller();
-    c.split("a", "cols");
-    expect(c.intent.value.orientation).toBeNull();
-    c.setContainerSize(600, 400);
-    c.split("missing", "cols");
-    c.split("a", "bad" as Orientation);
-    expect(c.intent.value.orientation).toBeNull();
-    c.split("a", "cols");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["b", "a"]);
-    c.split("d", "rows");
-    expect(c.orientation.value).toBe("cols");
-    const last = controller({ tabs: ["a", "b"], active: { get: () => "b", set: vi.fn() } });
-    const setter = vi.fn();
-    const prev = controller({ tabs: ["a", "b"], active: { get: () => "b", set: setter } });
-    prev.setContainerSize(600, 400);
-    prev.split("b", "rows");
-    expect(setter).toHaveBeenCalledWith("a");
-    last.dispose();
-  });
-
-  it("shows deep links in pane 1 and falls back from an absent second active", () => {
-    const a = ref("a");
-    const c = controller({ active: { get: () => a.value, set: (id) => { a.value = id; } } });
-    c.setContainerSize(600, 400);
-    c.split("b", "rows");
-    c.moveTo("d", 1);
-    c.select(1, "d");
-    a.value = "b";
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "b"]);
-    a.value = "c";
-    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "d"]);
-    c.moveTo("d", 0);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "b"]);
-  });
-
-  it("moves both ways behind the shown tabs, chooses active neighbors, and selects same-pane moves", () => {
-    const c = controller();
-    c.setContainerSize(600, 400);
-    c.split("b", "rows");
-    c.moveToOther("a");
-    expect(c.panes.value.map((p) => p.tabs)).toEqual([["c", "d"], ["a", "b"]]);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "b"]);
-    c.moveTo("a", 0);
-    expect(c.panes.value.map((p) => p.active)).toEqual(["c", "b"]);
-    c.moveTo("d", 1);
-    c.select(1, "d");
-    c.moveTo("b", 1);
-    expect(c.panes.value[1]?.active).toBe("b");
-    c.moveTo("b", 0);
-    expect(c.intent.value.secondActive).toBe("d");
-    expect(c.panes.value[0]?.tabs).toEqual(["a", "b", "c"]);
-    expect(c.panes.value[0]?.active).toBe("c");
-  });
-
-  it.each([0, 1] as const)("merges when moving the last present tab out of pane %i", (pane) => {
-    const c = controller({ tabs: ["a", "b"] });
-    c.setContainerSize(600, 400);
-    c.split("b", "cols");
-    const id = pane === 0 ? "a" : "b";
-    c.moveToOther(id);
-    expect(c.isSplit.value).toBe(false);
-    expect(c.intent.value.second).toEqual([]);
-    expect(c.intent.value.orientation).toBeNull();
-    expect(c.panes.value[0]?.active).toBe(pane === 0 ? "b" : "a");
-  });
-
-  it("validates action pane/membership and persists only changed intent", () => {
-    const s = storage();
-    const c = controller({ storage: s });
-    c.setContainerSize(600, 400);
-    c.moveTo("a", 1);
-    c.select(1, "a");
-    expect(s.setItem).not.toHaveBeenCalled();
-    c.split("b", "cols");
-    const writes = s.setItem.mock.calls.length;
-    c.moveTo("missing", 0);
-    c.moveTo("a", 3 as PaneIndex);
-    c.select(0, "b");
-    c.select(1, "a");
-    c.select(1, "b");
-    expect(s.setItem).toHaveBeenCalledTimes(writes);
-    c.select(0, "c");
-    expect(c.panes.value[0]?.active).toBe("c");
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-  });
-
-  it("merge clears membership but keeps ratio", () => {
-    const c = controller();
-    c.setContainerSize(600, 400);
-    c.split("b", "rows");
-    c.commitRatio(0.6);
-    c.merge();
-    expect(c.intent.value).toEqual({ orientation: null, firstActive: "", order: [], opened: [], second: [], secondActive: "", ratio: 0.6 });
-    expect(c.ratio.value).toBe(0.6);
-    c.split("c", "cols");
-    expect(c.ratio.value).toBe(0.6);
-  });
-
-  it.each(["rows", "cols"] as const)("clamps %s ratios, keeps live edits in memory, and commits once", (o) => {
-    const s = storage();
-    const c = controller({ storage: s, defaultRatio: 0.4 });
-    expect(c.ratio.value).toBe(0.4);
-    c.setContainerSize(506, 406);
-    c.split("b", o);
-    const writes = s.setItem.mock.calls.length;
-    c.setRatioLive(-1);
-    expect(c.ratio.value).toBe(0.2);
-    c.setRatioLive(2);
-    expect(c.ratio.value).toBe(0.8);
-    expect(s.setItem).toHaveBeenCalledTimes(writes);
-    c.commitRatio(0.7);
-    expect(c.intent.value.ratio).toBe(0.7);
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-    c.setContainerSize(0, 0);
-    expect(c.ratio.value).toBe(0.4);
-    expect(c.intent.value.ratio).toBe(0.7);
-  });
-
-  it("reacts to ref/getter keys, reloads entries, and stops its key watcher on dispose", () => {
-    const key = ref("one");
-    const c = controller({ entryKey: () => key.value });
-    c.setContainerSize(600, 400);
-    c.split("b", "rows");
-    key.value = "two";
-    expect(c.intent.value.orientation).toBeNull();
-    c.split("d", "cols");
-    key.value = "one";
-    expect(c.intent.value.second).toEqual(["b"]);
-    c.dispose();
-    key.value = "two";
-    expect(c.intent.value.second).toEqual(["b"]);
-  });
-
-  it("keeps a bounded monotonic LRU and bumps reads and changed actions", () => {
-    const s = storage();
-    const key = ref("one");
-    const c = controller({ storage: s, entryKey: key, maxEntries: 2 });
-    c.setContainerSize(600, 400);
-    c.split("b", "rows");
-    key.value = "two";
-    c.split("c", "cols");
-    const before = s.getItem("layouts");
-    key.value = "one";
-    expect(s.getItem("layouts")).not.toBe(before);
-    key.value = "three";
-    c.split("d", "rows");
-    key.value = "two";
-    expect(c.intent.value.orientation).toBeNull();
-    key.value = "one";
-    expect(c.intent.value.second).toEqual(["b"]);
-    const table = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { key: string; stamp: number }[] };
-    expect(table.entries.map((e) => e.key)).toEqual(["three", "one"]);
-    expect(table.entries.map((e) => e.stamp)).toEqual([4, 5]);
-    c.dispose();
-  });
-
-  it("reloads a stored entry in a new controller, bumps recency, and never persists size clamps", () => {
-    const s = storage();
-    const c = controller({ storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "rows");
-    c.moveTo("d", 1);
-    c.select(1, "b");
-    c.commitRatio(0.7);
-    c.dispose();
-    const previous = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { stamp: number }[] };
-    const restored = controller({ storage: s });
-    expect(restored.intent.value).toEqual({
-      orientation: "rows", firstActive: "a", order: [], opened: [], second: ["b", "d"], secondActive: "b", ratio: 0.7,
-    });
-    const bumped = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { stamp: number }[] };
-    expect(bumped.entries[0]?.stamp).toBe((previous.entries[0]?.stamp ?? 0) + 1);
-    const writes = s.setItem.mock.calls.length;
-    restored.setContainerSize(606, 206);
-    expect(restored.ratio.value).toBe(0.6);
-    expect(restored.intent.value.ratio).toBe(0.7);
-    expect(s.setItem).toHaveBeenCalledTimes(writes);
-    restored.setContainerSize(606, 406);
-    expect(restored.ratio.value).toBe(0.7);
-    restored.dispose();
-  });
-
-  it("defaults to fifty entries and evicts the oldest after the fifty-first action", () => {
-    const key = ref("0");
-    const s = storage();
-    const c = controller({ entryKey: key, storage: s });
-    c.setContainerSize(606, 406);
-    for (let i = 0; i < 51; i++) { key.value = String(i); c.split("b", "cols"); }
-    const table = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { key: string; stamp: number }[] };
-    expect(table.entries).toHaveLength(50);
-    expect(table.entries[0]).toEqual(expect.objectContaining({ key: "1", stamp: 2 }));
-    expect(table.entries[49]).toEqual(expect.objectContaining({ key: "50", stamp: 51 }));
-    key.value = "0";
-    expect(c.intent.value.orientation).toBeNull();
-    c.dispose();
-  });
-
-  it("uses pane-1 fallback when its saved active tab disappears and keeps intent", () => {
-    const tabs = ref(["a", "b", "c", "d"]);
-    const c = controller({ tabs });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.moveTo("d", 1);
-    c.select(1, "d");
-    tabs.value = ["a", "b", "c"];
-    expect(c.panes.value[1]?.active).toBe("b");
-    expect(c.intent.value.secondActive).toBe("d");
+  it("a newly present tab goes after its nearest placed natural predecessor in the first pane, otherwise first", () => {
+    const tabs = ref(["b", "d"]);
+    const { c, storage } = make({ tabs });
+    c.split("right");
     tabs.value = ["a", "b", "c", "d"];
-    expect(c.panes.value[1]?.active).toBe("d");
+    expect(c.panes.value[0]!.tabs).toEqual(["a", "b", "c", "d"]);
+    expect(writes(storage)).toBe(1);
   });
 
-  it("respects custom divider and minima and rejects a one-tab split", () => {
-    const c = controller({ tabs: ["a"], dividerSize: 10, minPaneWidth: 30, minPaneHeight: 40 });
-    c.setContainerSize(70, 90);
-    expect(c.fits.value).toEqual({ rows: true, cols: true });
-    expect(c.canOfferSplit.value).toBe(false);
-    c.split("a", "cols");
-    expect(c.isSplit.value).toBe(false);
-    expect(c.intent.value.orientation).toBeNull();
-  });
-
-  it("keeps intent deeply readonly and treats non-finite ratio/size input safely", () => {
-    const c = controller({ defaultRatio: 0.4 });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    Reflect.set(c.intent.value, "orientation", "rows");
-    expect(c.intent.value.orientation).toBeNull();
-    expect(warn).toHaveBeenCalled();
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.setRatioLive(Number.NaN);
-    expect(c.ratio.value).toBe(0.4);
-    c.setContainerSize(Number.NaN, Number.POSITIVE_INFINITY);
-    expect(c.fits.value).toEqual({ rows: false, cols: false });
-  });
-
-  it.each(["{", "null", "[]", '{"entries":[{"key":"page","stamp":1,"intent":{"orientation":"bad"}}]}'])("rejects corrupt storage boundary %s", (raw) => {
-    const s = storage();
-    s.values.set("layouts", raw);
-    const c = controller({ storage: s });
-    c.setContainerSize(600, 400);
-    expect(() => c.split("b", "rows")).not.toThrow();
-    expect(c.isSplit.value).toBe(true);
-  });
-
-  it("survives throwing reads/writes while retaining per-key memory", () => {
-    const key = ref("one");
-    const s = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("quota"); }, removeItem: () => { throw new Error("denied"); } };
-    const c = controller({ storage: s, entryKey: key });
-    c.setContainerSize(600, 400);
-    expect(() => c.split("b", "rows")).not.toThrow();
-    key.value = "two";
-    key.value = "one";
-    expect(c.intent.value.second).toEqual(["b"]);
-    c.dispose();
-  });
-
-  it("uses default localStorage and falls back when unavailable", () => {
-    const options = { tabs: ["a", "b"], entryKey: "default", storageKey: "default-table", minPaneWidth: 10, minPaneHeight: 10 };
-    const c = createSplitTabsController(options);
-    c.setContainerSize(100, 100);
-    c.split("b", "cols");
-    expect(localStorage.getItem("default-table")).not.toBeNull();
-    vi.stubGlobal("window", undefined);
-    const memory = createSplitTabsController(options);
-    memory.setContainerSize(100, 100);
-    expect(() => memory.split("a", "rows")).not.toThrow();
-    expect(memory.isSplit.value).toBe(true);
-    c.dispose();
-    memory.dispose();
-  });
-});
-
-describe("controller restoration", () => {
-  it("records primary selection in the same single write, including same-pane moves", () => {
-    const s = storage();
-    const c = controller({ storage: s });
-    c.select(0, "c");
-    expect(c.intent.value.firstActive).toBe("c");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(s.setItem.mock.calls[0]?.[1] ?? "null")).toEqual({ entries: [{ key: "page", stamp: 1, intent: {
-      tree: { kind: "pane", id: "pane-0", tabs: [], active: "c" }, firstActive: "c", order: [], opened: [], ratio: 0.5,
-    } }] });
-    expect(c.restoredActive.value).toBe("");
-    c.setContainerSize(606, 406);
-    c.split("b", "rows");
-    expect(c.intent.value.firstActive).toBe("c");
-    const writes = s.setItem.mock.calls.length;
-    c.moveTo("d", 0);
-    expect(c.intent.value.firstActive).toBe("d");
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-    c.select(1, "b");
-    expect(c.intent.value.firstActive).toBe("d");
-  });
-
-  it("records active-changing split and both move directions atomically", () => {
-    const s = storage();
-    const value = ref("a");
-    const observed: string[] = [];
-    const c = controller({ storage: s, active: { get: () => value.value, set: (id) => {
-      const table = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { intent: { firstActive: string } }[] };
-      observed.push(table.entries[0]?.intent.firstActive ?? "");
-      value.value = id;
-    } } });
-    c.setContainerSize(606, 406);
-    c.split("a", "rows");
-    expect(c.intent.value.firstActive).toBe("b");
-    expect(s.setItem).toHaveBeenCalledTimes(1);
-    c.moveTo("b", 1);
-    expect(c.intent.value.firstActive).toBe("c");
-    expect(s.setItem).toHaveBeenCalledTimes(2);
-    c.moveTo("a", 0);
-    expect(c.intent.value.firstActive).toBe("c");
-    expect(s.setItem).toHaveBeenCalledTimes(3);
-    expect(observed).toEqual(["b", "c"]);
-  });
-
-  it.each(["a", "b"])("records last-tab move %s with merge in one write", (id) => {
-    const s = storage();
-    const c = controller({ storage: s, tabs: ["a", "b"] });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    const writes = s.setItem.mock.calls.length;
-    c.moveToOther(id);
-    expect(c.intent.value).toEqual({
-      orientation: null, firstActive: id === "a" ? "b" : "a", order: [], opened: [], second: [], secondActive: "", ratio: 0.5,
-    });
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
-    expect(c.restoredActive.value).toBe("");
-    c.merge();
-    expect(c.intent.value.firstActive).toBe("");
-  });
-
-  it("restores a request after reload, even collapsed, without selecting for the host", () => {
-    const s = storage();
-    const c = controller({ storage: s });
-    c.setContainerSize(606, 406);
-    c.split("b", "cols");
-    c.select(0, "d");
-    c.dispose();
-    const set = vi.fn();
-    const loaded = controller({ storage: s, active: { get: () => "a", set } });
-    expect(loaded.restoredActive.value).toBe("d");
-    expect(loaded.panes.value[0]?.active).toBe("a");
-    expect(set).not.toHaveBeenCalled();
-    loaded.setContainerSize(100, 100);
-    expect(loaded.isSplit.value).toBe(false);
-    expect(loaded.restoredActive.value).toBe("d");
-    loaded.setContainerSize(606, 406);
-    expect(loaded.restoredActive.value).toBe("d");
-    loaded.merge();
-    expect(loaded.intent.value.firstActive).toBe("");
-    expect(loaded.restoredActive.value).toBe("");
-    loaded.dispose();
-  });
-
-  it.each([
-    { orientation: "rows", firstActive: "", second: ["b"], expected: "" },
-    { orientation: "rows", firstActive: "absent", second: ["b"], expected: "" },
-    { orientation: "rows", firstActive: "b", second: ["b"], expected: "" },
-    { orientation: null, firstActive: "c", second: [], expected: "" },
-    { orientation: "rows", firstActive: "c", second: ["b"], expected: "c" },
-  ])("gates restoration on saved split membership: %j", ({ expected, ...intent }) => {
-    const s = storage();
-    s.values.set("layouts", JSON.stringify({ entries: [{ key: "page", stamp: 1, intent: { ...intent, secondActive: "b", ratio: 0.5 } }] }));
-    const c = controller({ storage: s });
-    expect(c.restoredActive.value).toBe(expected);
-  });
-
-  it("never learns host navigation or writes on derived changes", () => {
-    const s = storage();
+  it("an absent tab keeps its place; a pane whose views are all absent disappears and comes back, without writing", () => {
     const tabs = ref(["a", "b", "c", "d"]);
-    const active = ref("a");
-    const c = controller({ storage: s, tabs, active: { get: () => active.value, set: (id) => { active.value = id; } } });
-    c.setContainerSize(606, 406);
-    c.split("b", "rows");
-    c.select(0, "c");
-    const writes = s.setItem.mock.calls.length;
-    active.value = "d";
+    const { c, storage } = make({ tabs });
+    splitOff(c, "c", "a", "right");
+    expect(c.notation.value).toBe("H[(*a b d) c]");
+    const n = writes(storage);
     tabs.value = ["a", "b", "d"];
-    c.setContainerSize(100, 100);
-    expect(c.intent.value.firstActive).toBe("c");
-    expect(c.restoredActive.value).toBe("");
+    expect(c.notation.value).toBe("(*a b d)");
     tabs.value = ["a", "b", "c", "d"];
-    expect(c.restoredActive.value).toBe("c");
-    active.value = "a";
-    c.setContainerSize(606, 406);
-    c.moveTo("c", 1);
-    expect(c.intent.value.firstActive).toBe("a");
-    expect(c.restoredActive.value).toBe("a");
-    expect(s.setItem).toHaveBeenCalledTimes(writes + 1);
+    expect(c.notation.value).toBe("H[(*a b d) c]");
+    expect(writes(storage)).toBe(n);
+  });
+});
+
+describe("optional tabs and placeholders", () => {
+  it("an optional tab is hidden until opened; open reveals it in the focused pane; close forgets it", () => {
+    const { c, storage } = make({ optional: ["d"] });
+    c.open("d");
+    expect(c.notation.value).toBe("(a b c *d)");
+    expect(c.opened.value).toEqual(["d"]);
+    expect(writes(storage)).toBe(1);
+    expect(c.close("d")).toEqual({ ok: true });
+    expect(c.opened.value).toEqual([]);
+    expect(c.notation.value).toBe("(*a b c)");
   });
 
-  it("records the displayed tab when splitting off another tab, over a stale request", () => {
-    // Host shape: no explicit selection shows restoredActive, else the first tab.
-    const explicit = ref<string | undefined>(undefined);
-    const c: ReturnType<typeof controller> = controller({ active: {
-      get: () => explicit.value ?? (c.restoredActive.value || "a"),
-      set: (id) => { explicit.value = id; },
-    } });
-    c.setContainerSize(606, 406);
-    c.select(0, "d");
-    expect(c.intent.value.firstActive).toBe("d");
-    explicit.value = undefined;
-    expect(c.panes.value[0]?.active).toBe("a");
-    c.split("c", "rows");
-    expect(c.intent.value.firstActive).toBe("a");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
+  it("a host tab that is not optional cannot be closed: the whole close is refused", () => {
+    const { c, storage } = make();
+    expect(c.close("a")).toEqual({ ok: false, reason: "not-closable", nodes: ["a"] });
+    expect(c.closeTarget()).toEqual({ ok: false, reason: "not-closable", nodes: ["a", "b", "c", "d"] });
+    expect(writes(storage)).toBe(0);
   });
 
-  it("loads an omitted firstActive as empty while retaining split intent", () => {
-    const s = storage();
-    s.values.set("layouts", JSON.stringify({ entries: [{ key: "page", stamp: 4, intent: { orientation: "cols", second: ["b"], secondActive: "b", ratio: 0.7 } }] }));
-    const c = controller({ storage: s });
-    expect(c.intent.value).toEqual({ orientation: "cols", firstActive: "", order: [], opened: [], second: ["b"], secondActive: "b", ratio: 0.7 });
-    expect(c.restoredActive.value).toBe("");
-    c.setContainerSize(606, 406);
-    expect(c.isSplit.value).toBe(true);
+  it("new panes and tabs hold placeholders that the host fills with replace", () => {
+    const { c } = make({ optional: ["d"] });
+    expect(c.split("right")).toMatchObject({ ok: true, view: "new:1" });
+    expect(c.isPlaceholder("new:1")).toBe(true);
+    expect(c.notation.value).toBe("H[(*a b c) new:1]");
+    expect(c.focus.value).toBe(pane(c, "new:1"));
+    c.replace("new:1", "d");
+    expect(c.notation.value).toBe("H[(*a b c) d]");
+    expect(c.opened.value).toEqual(["d"]);
+    expect(c.tabNext()).toMatchObject({ ok: true, view: "new:2" });
+    expect(c.tabInside()).toMatchObject({ ok: true, view: "new:3" });
+    expect(c.notation.value).toBe("H[(*a b c) T{d | *(new:2 *new:3)}]");
+    expect(c.isClosable("new:2")).toBe(true);
+    expect(c.isClosable("a")).toBe(false);
+    expect(c.close("new:2")).toEqual({ ok: true });
+    expect(c.notation.value).toBe("H[(*a b c) (d *new:3)]");
   });
+});
 
-  it("salvages valid entries and keeps the newest valid duplicate by stamp", () => {
-    const s = storage();
-    const saved = (firstActive: string) => ({ orientation: "cols", firstActive, second: ["b"], secondActive: "b", ratio: 0.5 });
-    s.values.set("layouts", JSON.stringify({ entries: [
-      { key: "page", stamp: 9, intent: saved("d") },
-      { key: "broken", stamp: 20, intent: { ...saved("a"), firstActive: 3 } },
-      null,
-      { key: "page", stamp: 2, intent: saved("a") },
-      { key: "other", stamp: 5, intent: saved("c") },
-      { key: "page", stamp: 30, intent: { ...saved("a"), ratio: "bad" } },
-    ] }));
-    const key = ref("page");
-    const c = controller({ storage: s, entryKey: key });
-    expect(c.restoredActive.value).toBe("d");
-    const table = JSON.parse(s.getItem("layouts") ?? "null") as { entries: { key: string; stamp: number }[] };
-    expect(table.entries.map((entry) => [entry.key, entry.stamp])).toEqual([["other", 5], ["page", 10]]);
-    key.value = "other";
-    expect(c.restoredActive.value).toBe("c");
+describe("self-drop persistence", () => {
+  it.each(["absent", "unopened"])("a lone visible tab with an %s sibling self-splits and refuses its own bar without writes", hidden => {
+    const tabs = ref(["a", "x", "b"]), optional = ref<string[]>([]);
+    const { c, storage } = make({ tabs, optional });
+    splitOff(c, "b", "a", "right");
+    if (hidden === "absent") tabs.value = ["a", "b"]; else optional.value = ["x"];
+    const original = JSON.parse(JSON.stringify(c.intent.value.tree)) as LayoutNode, count = writes(storage), target = c.paneOf("a")!;
+    for (const kind of ["inside", "bar"] as const) {
+      const zone = kind === "bar" ? { kind, target, index: 2 } as const : { kind, target } as const;
+      expect(c.canMove({ view: "a" }, zone)).toEqual({ ok: false, reason: "nothing-to-move" });
+      expect(c.move({ view: "a" }, zone)).toEqual({ ok: false, reason: "nothing-to-move" });
+      expect(c.intent.value.tree).toEqual(original);
+      expect(writes(storage)).toBe(count);
+    }
+    const zone = { kind: "split", target, side: "right" } as const;
+    expect(c.canMove({ view: "a" }, zone)).toEqual({ ok: true, selfSplit: true });
+    expect(c.move({ view: "a" }, zone)).toMatchObject({ ok: true, selfSplit: true, view: "new:1" });
+    expect(c.notation.value).toBe("H[T{H[new:1 a]} b]");
+    expect(c.intent.value.tree.kind === "cut" && c.intent.value.tree.first).toMatchObject({
+      kind: "tabs", tabs: [{ kind: "cut" }, "x"],
+    });
+    expect(writes(storage)).toBe(count + 1);
+    c.dispose();
+  });
+  it.each(["placeholder", "identity"].flatMap(by => [true, false].map(shown => ({ by, shown }))))(
+    "self-split sizes the actual next pane under a $by bar policy (shown=$shown)", ({ by, shown }) => {
+    const { c, storage } = make({ tabs: ["a"] }, [600, 180]);
+    const source = c.focus.value, zone = { kind: "split", target: source, side: "bottom" } as const;
+    const seen: { id: string; tabs: readonly string[] }[] = [];
+    c.setAlwaysShow(set => {
+      seen.push({ id: set.id, tabs: [...set.tabs] });
+      return (by === "identity" ? set.id === "tabs-3" : set.tabs.some(tab => tab.startsWith("new:"))) ? shown : !shown;
+    });
+    if (!shown) c.cycleBarSide(); // Source bar stays on the other axis; only the new bar can prevent a rows split.
+    const count = writes(storage);
+    const before = JSON.stringify(c.intent.value);
+    for (let n = 0; n < 3; n++) expect(c.canMove({ node: source }, zone))
+      .toMatchObject(shown ? { ok: false, reason: "no-room", selfSplit: true } : { ok: true, selfSplit: true });
+    if (shown) {
+      expect(c.move({ node: source }, zone)).toMatchObject({ ok: false, reason: "no-room" });
+      expect(JSON.stringify(c.intent.value)).toBe(before);
+      expect(writes(storage)).toBe(count);
+      c.setAlwaysShow(false);
+    }
+    const result = c.move({ node: source }, zone);
+    expect(result).toMatchObject({ ok: true, selfSplit: true, view: "new:1", node: "tabs-3" });
+    expect(seen).toContainEqual({ id: "tabs-3", tabs: ["new:1"] });
+    expect(writes(storage)).toBe(count + 1);
+    c.dispose();
+  });
+  it("a prospective pane avoids a colliding placeholder id without consuming either id", () => {
+    const { c, storage } = make({ tabs: ["a"], placeholderPrefix: "tabs-" }, [600, 180]);
+    const zone = { kind: "split", target: c.focus.value, side: "bottom" } as const;
+    c.setAlwaysShow(set => set.id === "tabs-4" && set.tabs[0] === "tabs-3");
+    for (let n = 0; n < 3; n++) expect(c.canMove({ node: zone.target }, zone)).toMatchObject({ ok: false, reason: "no-room" });
+    expect(c.move({ node: zone.target }, zone)).toMatchObject({ ok: false, reason: "no-room" });
+    expect(writes(storage)).toBe(0);
+    c.setAlwaysShow(false);
+    expect(c.move({ node: zone.target }, zone)).toMatchObject({ ok: true, node: "tabs-4", view: "tabs-3" });
+    expect(writes(storage)).toBe(1);
+    c.dispose();
+  });
+  describe.each(["pane", "shown label"] as const)("%s source", sourceKind => {
+    it.each(["left", "right", "top", "bottom"] as const)("splits inside shown B on %s, retaining A and writing once", side => {
+      const { c, storage } = make({ tabs: ["A", "B"], placeholderPrefix: "split-tabs:new-" });
+      const host = c.focus.value;
+      c.select(host, "B");
+      storage.setItem.mockClear();
+      expect(c.notation.value).toBe("(A *B)");
+      const source = sourceKind === "pane" ? { node: host } : { view: "B" };
+      const zone = { kind: "split", target: host, side } as const;
+      expect(c.canMove(source, zone)).toMatchObject({ ok: true, selfSplit: true });
+      expect(writes(storage)).toBe(0);
+      expect(c.move(source, zone)).toMatchObject({ ok: true, selfSplit: true, view: "split-tabs:new-1" });
+      const first = side === "left" || side === "top", axis = side === "left" || side === "right" ? "H" : "V";
+      const layout = `${axis}[${first ? "B split-tabs:new-1" : "split-tabs:new-1 B"}]`;
+      expect(c.notation.value).toBe(`T{A | *${layout}}`);
+      const tree = c.intent.value.tree;
+      expect(tree).toMatchObject({ kind: "tabs", id: host, tabs: ["A", { kind: "cut", ratio: 0.5 }] });
+      if (tree.kind !== "tabs" || typeof tree.tabs[1] === "string") throw new Error("expected layout tab");
+      expect(tree.active).toBe(tree.tabs[1]!.id);
+      expect(c.focus.value).toBe(c.paneOf("split-tabs:new-1"));
+      expect(c.canUndo.value).toBe(false);
+      expect(writes(storage)).toBe(1);
+      const reloaded = make({ tabs: ["A", "B"], placeholderPrefix: "split-tabs:new-", storage }).c;
+      expect(reloaded.intent.value).toEqual(c.intent.value);
+      c.select(host, "A");
+      expect(c.panes.value.map(p => p.view)).toEqual(["A"]);
+      expect(c.notation.value).toBe(`T{*A | ${layout}}`);
+      c.select(host, tree.active);
+      expect(c.panes.value.map(p => p.view)).toEqual(first ? ["B", "split-tabs:new-1"] : ["split-tabs:new-1", "B"]);
+      expect(c.notation.value).toBe(`T{A | *${layout}}`);
+      c.dispose(); reloaded.dispose();
+    });
+  });
+  it.each(["left", "right", "top", "bottom"] as const)("single-tab self-drop %s remains normalized and reloads unchanged", side => {
+    const { c, storage } = make({ tabs: ["a"] });
+    const source = c.focus.value, zone = { kind: "split", target: source, side } as const;
+    expect(c.canMove({ node: source }, zone).ok).toBe(true);
+    expect(writes(storage)).toBe(0);
+    expect(c.move({ node: source }, zone)).toMatchObject({ ok: true, view: "new:1" });
+    const content = "a", first = side === "left" || side === "top";
+    expect(c.notation.value).toBe(`${side === "left" || side === "right" ? "H" : "V"}[${first ? `${content} new:1` : `new:1 ${content}`}]`);
+    expect(c.focus.value).toBe(c.paneOf("new:1"));
+    expect(c.canUndo.value).toBe(false);
+    expect(writes(storage)).toBe(1);
+    const reloaded = make({ tabs: ["a"], storage }).c;
+    expect(reloaded.intent.value).toEqual(c.intent.value);
+    expect(reloaded.focus.value).toBe(reloaded.paneOf("new:1"));
+    const beforeSecondMove = writes(storage);
+    expect(c.move({ view: "new:1" }, { kind: "split", target: c.focus.value, side }).ok).toBe(true);
+    expect(c.isPlaceholder("new:2")).toBe(true);
+    expect(c.paneOf("new:2")).not.toBeNull();
+    expect(writes(storage)).toBe(beforeSecondMove + 1);
+    c.dispose(); reloaded.dispose();
+  });
+  it("a non-shown label still drags out of its own pane without a placeholder", () => {
+    const { c, storage } = make({ tabs: ["A", "B"] });
+    c.select(c.focus.value, "B");
+    storage.setItem.mockClear();
+    expect(c.move({ view: "A" }, { kind: "split", target: c.focus.value, side: "right" }).ok).toBe(true);
+    expect(c.notation.value).toBe("H[B A]");
+    expect(c.paneOf("new:1")).toBeNull();
+    expect(writes(storage)).toBe(1);
+    expect(c.canUndo.value).toBe(false);
+    c.dispose();
+  });
+  it.each(["pane", "shown label"] as const)("multi-tab %s self middle and no-room preserve intent without writes", sourceKind => {
+    const { c, storage } = make({ tabs: ["A", "B"] }, [205, 185]);
+    const host = c.focus.value;
+    c.select(host, "B");
+    storage.setItem.mockClear();
+    const before = JSON.stringify(c.intent.value), source = sourceKind === "pane" ? { node: host } : { view: "B" };
+    expect(c.move(source, { kind: "inside", target: host })).toEqual({ ok: false, reason: "into-itself" });
+    for (const side of ["left", "right", "top", "bottom"] as const) {
+      const zone = { kind: "split", target: host, side } as const;
+      expect(c.canMove(source, zone)).toMatchObject({ ok: false, reason: "no-room", selfSplit: true });
+      expect(c.move(source, zone)).toMatchObject({ ok: false, reason: "no-room", selfSplit: true });
+    }
+    expect(JSON.stringify(c.intent.value)).toBe(before);
+    expect(writes(storage)).toBe(0);
+    c.dispose();
+  });
+  it("self middle and no-room refusal do not write or change intent", () => {
+    const { c, storage } = make({ tabs: ["a"] }, [205, 165]);
+    const before = JSON.stringify(c.intent.value), source = { node: c.focus.value };
+    expect(c.move(source, { kind: "inside", target: c.focus.value })).toEqual({ ok: false, reason: "into-itself" });
+    for (const side of ["left", "right", "top", "bottom"] as const) {
+      const zone = { kind: "split", target: c.focus.value, side } as const;
+      expect(c.canMove(source, zone)).toMatchObject({ ok: false, reason: "no-room" });
+      expect(c.move(source, zone)).toMatchObject({ ok: false, reason: "no-room" });
+    }
+    expect(JSON.stringify(c.intent.value)).toBe(before);
+    expect(writes(storage)).toBe(0);
+    c.dispose();
+  });
+  it("self-drop counts a requested new one-tab bar even when the source bar is on another axis", () => {
+    const { c, storage } = make({ tabs: ["a"] }, [500, 200]);
+    c.setAlwaysShow(set => set.tabs.length === 1);
+    c.cycleBarSide();
+    expect(c.tabSet(c.focus.value)?.side).toBe("left");
+    const before = JSON.stringify(c.intent.value), count = writes(storage);
+    const zone = { kind: "split", target: c.focus.value, side: "bottom" } as const;
+    expect(c.canMove({ node: c.focus.value }, zone)).toMatchObject({ ok: false, reason: "no-room" });
+    expect(c.move({ node: c.focus.value }, zone)).toMatchObject({ ok: false, reason: "no-room" });
+    expect(JSON.stringify(c.intent.value)).toBe(before);
+    expect(writes(storage)).toBe(count);
     c.dispose();
   });
 });
 
-describe("controller tab history", () => {
-  function hosted(overrides: Parameters<typeof controller>[0] = {}) {
-    const explicit = ref<string | undefined>(undefined);
-    const set = vi.fn((id: string) => { explicit.value = id; });
-    const c: ReturnType<typeof controller> = controller({
-      active: { get: () => explicit.value ?? (c.restoredActive.value || "a"), set }, ...overrides,
-    });
-    c.setContainerSize(606, 406);
-    return { c, explicit, set };
-  }
-
-  it("keeps the previous tab on top when the selected tab is sent to the other pane", () => {
-    const { c } = hosted();
-    c.select(0, "c");
-    c.split("c", "rows");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
-    expect(c.intent.value.firstActive).toBe("a");
+describe("persistence", () => {
+  it("directional focus stays in memory until the next write while focusPane saves immediately", () => {
+    const { c, storage } = make();
+    splitOff(c, "b", "a", "right");
+    const before = writes(storage);
+    const savedFocus = () => JSON.parse(storage.values.get("layouts")!).entries[0].intent.focus;
+    expect(savedFocus()).toBe("b");
+    expect(c.focusDirection("left").ok).toBe(true);
+    expect(c.focus.value).toBe(pane(c, "a"));
+    expect(writes(storage)).toBe(before);
+    expect(savedFocus()).toBe("b");
+    c.cycleBarSide();
+    expect(writes(storage)).toBe(before + 1);
+    expect(savedFocus()).toBe("a");
+    c.focusPane(pane(c, "b"));
+    expect(writes(storage)).toBe(before + 2);
+    expect(savedFocus()).toBe("b");
+  });
+  it("each changed action writes once; reload restores the tree, the focus and the bars", () => {
+    const { c, storage } = make();
+    splitOff(c, "b", "a", "bottom");
+    expect(writes(storage)).toBe(1);
+    c.tabNext();
+    c.cycleBarSide();
+    c.setBarWidth(pane(c, "b"), 150);
+    expect(writes(storage)).toBe(4);
+    const reloaded = make({ storage }).c;
+    expect(reloaded.notation.value).toBe(c.notation.value);
+    expect(reloaded.restoredActive.value).toBe("new:1");
+    expect(reloaded.tabSet(reloaded.paneOf("b")!)).toMatchObject({ side: "left", barWidth: 150 });
   });
 
-  it("uses the most recent tab still in the top pane, skipping tabs sent to the other pane", () => {
-    const { c } = hosted({ tabs: ["a", "b", "c", "d", "e"] });
-    c.select(0, "e");
-    c.select(0, "a");
-    c.select(0, "c");
-    c.split("c", "rows");
-    expect(c.panes.value[0]?.active).toBe("a");
-    c.select(0, "d");
-    c.select(0, "b");
-    c.moveToOther("d");
-    c.moveToOther("b");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["a", "c"]);
+  it("focus and selection changes are memory, except that the focused view is remembered", () => {
+    const { c, storage } = make();
+    c.split("right");
+    const n = writes(storage);
+    c.focusPane(pane(c, "a"));
+    expect(writes(storage)).toBe(n + 1);
+    c.toggleSelected(pane(c, "new:1"));
+    expect(c.selection.value).toEqual([pane(c, "a"), pane(c, "new:1")]);
+    c.clearSelection();
+    c.focusPane(pane(c, "a"));
+    expect(writes(storage)).toBe(n + 1);
   });
 
-  it("falls back to the neighbor without history, and history is per page and memory-only", () => {
-    const s = storage();
-    const key = ref("page");
-    const { c, explicit } = hosted({ storage: s, entryKey: key });
-    c.select(0, "d");
-    key.value = "other";
-    explicit.value = "b";
-    c.split("b", "cols");
-    expect(c.panes.value[0]?.active).toBe("c");
-    expect(s.values.get("layouts")).not.toContain("history");
+  it("the table is a bounded LRU shared between controllers, stamped above every stored stamp", () => {
+    const storage = memoryStorage();
+    const key = ref("p1");
+    const { c } = make({ storage, entryKey: key, maxEntries: 2 });
+    const other = make({ storage, entryKey: "x" }).c;
+    c.split("right");
+    other.split("bottom");
+    key.value = "p2";
+    c.split("right");
+    const table = stored(storage);
+    expect(table.entries.map(e => e.key)).toEqual(["x", "p2"]);
+    expect(table.entries[1]!.stamp).toBeGreaterThan(table.entries[0]!.stamp);
   });
 
-  it("picks the recent tab for the other pane when dragging the selected tab to the start", () => {
-    const { c } = hosted();
-    c.select(0, "d");
-    c.select(0, "b");
-    c.splitAt("b", "cols", "start");
-    expect(c.panes.value.map((p) => p.active)).toEqual(["b", "d"]);
+  it("corrupt or throwing storage never breaks in-memory use; an invalid entry drops alone", () => {
+    const storage = memoryStorage();
+    storage.values.set("layouts", JSON.stringify({ entries: [
+      { key: "page", stamp: 1, intent: { version: 3, tree: { kind: "tabs", id: "t", tabs: ["a", "a"], active: "a" }, focus: "", opened: [] } },
+      { key: "other", stamp: 2, intent: { version: 3, tree: { kind: "tabs", id: "t", tabs: ["a"], active: "a" }, focus: "a", opened: [] } },
+    ] }));
+    const { c } = make({ storage });
+    expect(c.notation.value).toBe("(*a b c d)");
+    c.split("right");
+    expect(stored(storage).entries.map(e => e.key)).toEqual(["other", "page"]);
+    storage.setItem.mockImplementation(() => { throw new Error("quota"); });
+    expect(c.split("bottom").ok).toBe(true);
+    storage.values.set("layouts", "{not json");
+    expect(make({ storage }).c.notation.value).toBe("(*a b c d)");
+  });
+
+  it("0.2 trees and 0.1 two-pane entries migrate to equivalent tab sets", () => {
+    const storage = memoryStorage();
+    storage.values.set("layouts", JSON.stringify({ entries: [
+      { key: "old", stamp: 3, intent: { orientation: "rows", second: ["b"], secondActive: "b", ratio: 0.6 } },
+      { key: "page", stamp: 4, intent: { tree: { kind: "cut", id: "cut-0", orientation: "cols", ratio: 0.3,
+        first: { kind: "pane", id: "pane-0", tabs: [], active: "" }, second: { kind: "pane", id: "pane-1", tabs: ["c", "a"], active: "a" } },
+      firstActive: "d", order: ["d", "c", "b", "a"], opened: [], ratio: 0.3 } },
+    ] }));
+    const { c } = make({ storage });
+    expect(c.notation.value).toBe("H[(*d b) (c *a)]");
+    expect(c.cuts.value.get("cut-0")?.ratio).toBeCloseTo(0.3, 6);
+    expect(make({ storage, entryKey: "old" }).c.notation.value).toBe("V[(*a c d) b]");
   });
 });
 
-describe("controller move-to-other keeps what the destination shows", () => {
-  function hosted(tabs: string[] = ["a", "b", "c", "d"]) {
-    const explicit = ref<string | undefined>(undefined);
-    const c: ReturnType<typeof controller> = controller({
-      tabs, active: { get: () => explicit.value ?? (c.restoredActive.value || "a"), set: (id) => { explicit.value = id; } },
-    });
-    c.setContainerSize(606, 406);
-    return { c, explicit };
-  }
-  const shown = (c: ReturnType<typeof controller>) => c.panes.value.map((p) => p.active);
-
-  it("puts a tab sent up behind the top pane's shown tab", () => {
-    const { c } = hosted();
-    c.split("b", "rows");
-    c.moveTo("d", 1);
-    c.select(1, "d");
-    c.moveToOther("d");
-    expect(c.panes.value.map((p) => p.tabs)).toEqual([["a", "c", "d"], ["b"]]);
-    expect(shown(c)).toEqual(["a", "b"]);
-    expect(c.intent.value.firstActive).toBe("a");
+describe("host active binding", () => {
+  it("a dropped navigation followed by a duplicate route does not hide later host navigation", async () => {
+    vi.useFakeTimers();
+    const route = ref("a"), pending: string[] = [];
+    const { c, storage } = make({ tabs: ["a", "b", "c"], active: { get: () => route.value, set: id => pending.push(id) } });
+    splitOff(c, "c", "a", "right");
+    route.value = pending.pop()!;
+    c.focusDirection("left");
+    c.focusDirection("right");
+    pending.length = 0; // Router cancels the first request and drops the duplicate of its current route.
+    await nextTick();
+    vi.advanceTimersByTime(250);
+    const n = writes(storage);
+    route.value = "a";
+    expect(c.focus.value).toBe(pane(c, "a"));
+    expect(c.panes.value.find(p => p.id === c.focus.value)!.view).toBe("a");
+    expect(writes(storage)).toBe(n);
+    c.dispose();
+    vi.useRealTimers();
   });
 
-  it("puts a tab sent down behind the bottom pane's shown tab, the top showing the previous tab", () => {
-    const { c } = hosted();
-    c.split("b", "rows");
-    c.select(0, "d");
-    c.select(0, "c");
-    c.moveToOther("c");
-    expect(c.panes.value.map((p) => p.tabs)).toEqual([["a", "d"], ["b", "c"]]);
-    expect(shown(c)).toEqual(["d", "b"]);
+  it("disposing clears the duplicate navigation fallback timer", () => {
+    vi.useFakeTimers();
+    try {
+      const route = ref("a");
+      const { c } = make({ active: { get: () => route.value, set: () => undefined } });
+      splitOff(c, "c", "a", "right");
+      c.focusDirection("left");
+      expect(vi.getTimerCount()).toBe(1);
+      c.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
   });
 
-  it.each([
-    { from: "bottom", id: "b", expected: "a" },
-    { from: "top", id: "a", expected: "b" },
-  ])("keeps the destination's shown tab when moving the last $from tab merges", ({ id, expected }) => {
-    const { c } = hosted(["a", "b"]);
-    c.split("b", "rows");
-    c.moveToOther(id);
-    expect(c.isSplit.value).toBe(false);
-    expect(shown(c)).toEqual([expected]);
-    expect(c.intent.value.firstActive).toBe(expected);
+  it("binds the focused pane's view: actions set it, host navigation reveals without writing", () => {
+    const value = ref("a");
+    const set = vi.fn((id: string) => { value.value = id; });
+    const { c, storage } = make({ active: { get: () => value.value, set } });
+    splitOff(c, "c", "a", "right");
+    expect(set).toHaveBeenLastCalledWith("c");
+    const n = writes(storage);
+    value.value = "b";
+    expect(c.focus.value).toBe(pane(c, "b"));
+    expect(c.notation.value).toBe("H[(a *b d) c]");
+    expect(writes(storage)).toBe(n);
+    c.focusPane(pane(c, "c"));
+    expect(value.value).toBe("c");
   });
 
-  it("replaces the shown bottom tab with the last one viewed there", () => {
-    const { c } = hosted(["a", "b", "c", "d", "e"]);
-    c.split("b", "rows");
-    c.moveTo("c", 1);
-    c.moveTo("d", 1);
-    c.select(1, "d");
-    c.select(1, "b");
-    c.moveToOther("b");
-    expect(shown(c)).toEqual(["a", "d"]);
+  it("a getter lagging behind set() across a tick never pulls the focus back", async () => {
+    const value = ref("a");
+    const set = vi.fn();
+    const { c } = make({ active: { get: () => value.value, set } });
+    splitOff(c, "c", "a", "right");
+    expect(set).toHaveBeenLastCalledWith("c");
+    expect(c.focus.value).toBe(pane(c, "c"));
+    c.focusPane(pane(c, "c"));
+    expect(c.intent.value.focus).toBe("c");
+    c.focusDirection("left");
+    expect(set).toHaveBeenLastCalledWith("a");
+    expect(c.focus.value).toBe(pane(c, "a"));
+    await nextTick();
+    value.value = "c"; // the router lands on the first navigation, then on the second
+    expect(c.focus.value).toBe(pane(c, "a"));
+    value.value = "a";
+    expect(c.focus.value).toBe(pane(c, "a"));
+    value.value = "c"; // a host navigation once the router caught up
+    expect(c.focus.value).toBe(pane(c, "c"));
   });
 
-  it("keeps the top pane's tab when the host deep-links the bottom tab being moved", () => {
-    const { c, explicit } = hosted();
-    c.split("b", "rows");
-    explicit.value = "b";
-    expect(shown(c)).toEqual(["a", "b"]);
-    c.moveTo("c", 1);
-    c.moveToOther("b");
-    expect(shown(c)).toEqual(["a", "c"]);
+  it("a host request for a hidden or unknown tab changes nothing", () => {
+    const value = ref("zzz");
+    const { c } = make({ optional: ["d"], active: { get: () => value.value, set: id => { value.value = id; } } });
+    expect(c.focus.value).toBe(pane(c, "a"));
+    value.value = "d";
+    expect(c.notation.value).toBe("(*a b c)");
+  });
+});
+
+describe("size collapse", () => {
+  it("a cut that does not fit shows its subtree as one pane listing all its views; the tree comes back with room", () => {
+    const { c, storage } = make();
+    splitOff(c, "b", "a", "right");
+    splitOff(c, "c", "b", "bottom");
+    expect(c.notation.value).toBe("H[(*a d) V[b c]]");
+    const saved = JSON.stringify(c.intent.value);
+    const n = writes(storage);
+    c.setContainerSize(150, 800);
+    expect(c.panes.value.map(p => [p.collapsed, p.tabs, p.view])).toEqual([[true, ["a", "d", "b", "c"], "c"]]);
+    c.setContainerSize(1000, 120);
+    expect(c.panes.value.map(p => [p.collapsed, p.tabs, p.view])).toEqual([[false, ["a", "d"], "a"], [true, ["b", "c"], "c"]]);
+    c.setContainerSize(1000, 800);
+    expect(c.panes.value).toHaveLength(3);
+    expect(JSON.stringify(c.intent.value)).toBe(saved);
+    expect(writes(storage)).toBe(n);
   });
 
-  it("still reveals a tab dropped into the other pane", () => {
-    const { c } = hosted();
-    c.split("b", "rows");
-    c.place("b", 0, null);
-    expect(shown(c)[0]).toBe("b");
+  it("selecting a tab in a collapsed pane reveals it in the real tree", () => {
+    const { c } = make();
+    splitOff(c, "b", "a", "right");
+    c.setContainerSize(150, 800);
+    c.select(c.panes.value[0]!.id, "c");
+    expect(c.panes.value[0]!.view).toBe("c");
+    c.setContainerSize(1000, 800);
+    expect(c.focus.value).toBe(pane(c, "c"));
+    expect(c.notation.value).toBe("H[(a *c d) b]");
+  });
+});
+
+describe("commands, undo and zoom", () => {
+  it("grouping, then a layout tab next to the group", () => {
+    const { c } = make();
+    splitOff(c, "b", "a", "right");
+    splitOff(c, "c", "a", "bottom");
+    splitOff(c, "d", "b", "bottom");
+    expect(c.notation.value).toBe("H[V[a c] V[b d]]");
+    c.focusPane(pane(c, "a"));
+    c.toggleSelected(pane(c, "b"));
+    expect(c.plan.value).toMatchObject({ ok: true, kind: "exact", panes: [pane(c, "a"), pane(c, "b")] });
+    expect(c.group()).toMatchObject({ ok: true, kind: "exact" });
+    expect(c.notation.value).toBe("V[H[a b] H[c d]]");
+    c.focusPane(pane(c, "a"));
+    c.selectRectangle(pane(c, "b"));
+    c.tabNext();
+    expect(c.notation.value).toBe("V[T{H[a b] | *new:1} H[c d]]");
+    expect(c.frames.value).toHaveLength(0);
+    c.select(c.focus.value, c.tabSet(c.focus.value)!.tabs[0]!);
+    expect(c.frames.value).toHaveLength(1);
+  });
+
+  it("a refused selection preview names the panes in the way", () => {
+    const { c } = make();
+    splitOff(c, "b", "a", "right");
+    splitOff(c, "c", "a", "bottom");
+    splitOff(c, "d", "b", "bottom");
+    c.focusPane(pane(c, "a"));
+    c.toggleSelected(pane(c, "d"));
+    expect(c.plan.value).toMatchObject({ ok: false, kind: "error", intruders: [pane(c, "c"), pane(c, "b")] });
+    expect(c.group()).toEqual({ ok: false, reason: "not-groupable", nodes: [pane(c, "c"), pane(c, "b")] });
+  });
+
+  it("closing a selection can be undone exactly once, with one write each", () => {
+    const { c, storage } = make({ optional: ["c", "d"] });
+    c.open("c");
+    c.open("d");
+    c.select(pane(c, "a"), "a");
+    splitOff(c, "d", "a", "right");
+    splitOff(c, "c", "d", "bottom");
+    expect(c.notation.value).toBe("H[(*a b) V[d c]]");
+    const before = c.notation.value;
+    c.focusPane(pane(c, "d"));
+    c.toggleSelected(pane(c, "c"));
+    const n = writes(storage);
+    expect(c.closeTarget()).toEqual({ ok: true });
+    expect(c.notation.value).toBe("(*a b)");
+    expect(c.opened.value).toEqual([]);
+    expect(c.canUndo.value).toBe(true);
+    expect(c.undo()).toEqual({ ok: true });
+    expect(c.notation.value).toBe(before);
+    expect([...c.opened.value].sort()).toEqual(["c", "d"]);
+    expect(writes(storage)).toBe(n + 2);
+    expect(c.undo()).toEqual({ ok: false, reason: "unknown" });
+  });
+
+  it("zooming a selection that must first be regrouped shows exactly that rectangle, and restore shows everything", () => {
+    const { c } = make();
+    splitOff(c, "b", "a", "right");
+    splitOff(c, "c", "a", "bottom");
+    splitOff(c, "d", "b", "bottom");
+    expect(c.notation.value).toBe("H[V[a c] V[b d]]");
+    c.focusPane(pane(c, "a"));
+    c.toggleSelected(pane(c, "b"));
+    expect(c.toggleZoom().ok).toBe(true);
+    expect(c.panes.value.map(p => p.view)).toEqual(["a", "b"]);
+    expect(c.toggleZoom().ok).toBe(true);
+    expect(c.panes.value.map(p => p.view)).toEqual(["a", "b", "c", "d"]);
+    expect(c.notation.value).toBe("V[H[a b] H[c d]]");
+  });
+
+  it("zoom and restore are memory only; a layout command restores first", () => {
+    const { c, storage } = make();
+    splitOff(c, "b", "a", "right");
+    const n = writes(storage);
+    expect(c.zoom(pane(c, "b")).ok).toBe(true);
+    expect(c.panes.value.map(p => p.view)).toEqual(["b"]);
+    expect(c.zoomed.value).not.toBeNull();
+    expect(c.toggleZoom().ok).toBe(true);
+    expect(c.zoomed.value).toBeNull();
+    c.zoom(pane(c, "b"));
+    expect(writes(storage)).toBe(n);
+    c.split("bottom");
+    expect(c.zoomed.value).toBeNull();
+    expect(c.panes.value).toHaveLength(3);
+  });
+
+  it("dividers: live resizing writes nothing, a commit clamps and writes once, equalize makes thirds", () => {
+    const { c, storage } = make();
+    splitOff(c, "b", "a", "right");
+    splitOff(c, "c", "b", "right");
+    const outer = c.layout.value.kind === "cut" ? c.layout.value.id : "";
+    const n = writes(storage);
+    c.setRatioLive(0.9, outer);
+    expect(writes(storage)).toBe(n);
+    c.commitRatio(0.99, outer);
+    expect(writes(storage)).toBe(n + 1);
+    expect(c.cuts.value.get(outer)!.ratio).toBeCloseTo(1 - 206 / 994, 6);
+    c.equalize(outer);
+    for (const p of c.panes.value) expect(p.width).toBeCloseTo(988 / 3, 6);
+  });
+
+  it.each([0, 0.5, -3, Number.NaN, Number.POSITIVE_INFINITY])("dividerSize %s is refused at creation: a divider is at least 1px", (size) => {
+    expect(() => make({ dividerSize: size })).toThrow(/dividerSize/);
+  });
+
+  it("a 1px divider is accepted and used for the geometry", () => {
+    const { c } = make({ dividerSize: 1 });
+    splitOff(c, "b", "a", "right");
+    expect(c.dividerSize).toBe(1);
+    expect(c.panes.value.map(p => p.width)).toEqual([499.5, 499.5]);
+  });
+
+  it("a side bar's live width shows at once without writing; the commit writes once and drops the live value", () => {
+    const { c, storage } = make();
+    c.tabNext();
+    c.cycleBarSide();
+    const id = c.panes.value[0]!.id;
+    const n = writes(storage);
+    c.setBarWidthLive(id, 200);
+    expect(c.tabSet(id)!.barWidth).toBe(200);
+    c.setBarWidthLive(id, 50);
+    expect(c.tabSet(id)!.barWidth).toBe(96);
+    expect(writes(storage)).toBe(n);
+    c.setBarWidth(id, 230);
+    expect(writes(storage)).toBe(n + 1);
+    c.setBarWidthLive(id, null);
+    expect(c.tabSet(id)!.barWidth).toBe(230);
+  });
+
+  it("nudge moves the divider nearest to the focused pane", () => {
+    const { c } = make();
+    splitOff(c, "b", "a", "right");
+    const outer = c.layout.value.kind === "cut" ? c.layout.value.id : "";
+    expect(c.nudge(100).ok).toBe(true);
+    expect(c.cuts.value.get(outer)!.ratio).toBeCloseTo(0.5 + 100 / (1000 - c.dividerSize), 6);
+  });
+
+  it("canMove is a dry run; unknown ids change nothing", () => {
+    const { c, storage } = make();
+    expect(c.canMove({ view: "b" }, { kind: "split", target: pane(c, "a"), side: "left" })).toEqual({ ok: true });
+    expect(c.move({ view: "zzz" }, { kind: "split", target: pane(c, "a"), side: "left" })).toEqual({ ok: false, reason: "unknown" });
+    expect(writes(storage)).toBe(0);
+    expect(c.panes.value).toHaveLength(1);
+  });
+
+  it("insert moves an already-visible view without calling the registration callback", () => {
+    const { c, storage } = make();
+    const register = vi.fn();
+    expect(c.insert("b", { kind: "split", target: pane(c, "a"), side: "right" }, register).ok).toBe(true);
+    expect(register).not.toHaveBeenCalled();
+    expect(c.notation.value).toBe("H[(*a c d) b]");
+    expect(writes(storage)).toBe(1);
+  });
+
+  it("insert registers an external tab after the target is resolved, and places it in one write", () => {
+    const tabs = ref(["a", "b"]);
+    const { c, storage } = make({ tabs });
+    const calls: string[] = [];
+    const r = c.insert("x", { kind: "split", target: pane(c, "a"), side: "right" }, () => { calls.push("register"); tabs.value = ["a", "b", "x"]; });
+    expect(r.ok).toBe(true);
+    expect(calls).toEqual(["register"]);
+    expect(c.notation.value).toBe("H[(*a b) x]");
+    expect(writes(storage)).toBe(1);
+  });
+
+  it("merge brings every view into one tab set", () => {
+    const { c } = make();
+    splitOff(c, "b", "a", "right");
+    splitOff(c, "c", "b", "bottom");
+    c.merge();
+    expect(c.notation.value).toBe("(a d b *c)");
+  });
+
+  it("an entry key change reloads its own layout and resets selection, zoom and undo", async () => {
+    const key = ref("one");
+    const { c } = make({ entryKey: key });
+    c.split("right");
+    c.toggleSelected(c.panes.value[0]!.id);
+    key.value = "two";
+    await nextTick();
+    expect(c.panes.value).toHaveLength(1);
+    expect(c.selection.value).toEqual([]);
+    expect(c.canUndo.value).toBe(false);
+    key.value = "one";
+    expect(c.panes.value).toHaveLength(2);
+  });
+
+  it("the exported notation reads a saved tree", () => {
+    const { c } = make();
+    c.split("right");
+    expect(notation(c.intent.value.tree as LayoutNode)).toBe("H[(*a b c d) new:1]");
   });
 });

@@ -3,100 +3,146 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/dist/style.css">
   <script type="importmap">{ "imports": { "vue": "/vue.js" } }</script>
   <style>
     html, body { margin: 0; }
-    #host { width: 600px; height: 400px; }
-    #external-row { position: fixed; left: 650px; top: 80px; }
+    #host { width: 800px; height: 560px; margin: 20px; }
+    iframe { width: 100%; height: 100%; border: 0; }
+    .content { flex: 1; }
   </style>
 </head>
 <body>
 <div id="host"></div>
-<button id="external-row" type="button">External item</button>
+<button id="shell-focus" type="button">Focus shell</button>
+<input id="host-input" aria-label="Host typing">
+<div id="host-editable" contenteditable="true" aria-label="Host editing"></div>
+<!-- A document outside the library holding the keyboard, as the host app around the layout would. -->
+<iframe id="foreign" title="Foreign" srcdoc="<input id='outside' aria-label='outside'>" style="width: 200px; height: 40px;"></iframe>
 <script type="module">
-  import { createApp, defineComponent, h, ref } from "vue";
-  import { createSplitTabsController, SplitTabs, SplitTabStrip, SplitTabsKeep, useSplitTabsPick } from "/dist/index.js";
+  import { createApp, h, ref } from "vue";
+   import { defaultPointerChords, SplitTabsAnchor, createSplitTabsController, SplitTabs, SplitTabsKeep } from "/dist/index.js";
 
-  const PickProbe = defineComponent({ setup() {
-    window.pick = useSplitTabsPick();
-    return () => null;
-  } });
-
-  const count = Number(new URLSearchParams(location.search).get("n") || 12);
-  window.resizeLog = [];
-  const NativeResizeObserver = window.ResizeObserver;
-  window.ResizeObserver = class extends NativeResizeObserver {
-    constructor(callback) {
-      super((entries, observer) => {
-        window.resizeLog.push(entries.map(entry => [entry.contentRect.width, entry.contentRect.height]));
-        callback(entries, observer);
-      });
-      window.resizeLog.push("constructed");
+  // Track exact window listener identities, including capture, to catch gesture leaks.
+  const listeners = [];
+  const add = window.addEventListener;
+  const remove = window.removeEventListener;
+  const capture = options => typeof options === "boolean" ? options : !!options?.capture;
+  window.addEventListener = function(type, listener, options) {
+    const library = new Error().stack.includes("/dist/index.js");
+    if (library && !listeners.some(l => l.type === type && l.listener === listener && l.capture === capture(options))) {
+      listeners.push({ type, listener, capture: capture(options) });
     }
-    observe(element, options) {
-      window.resizeLog.push(["observe", element.className]);
-      super.observe(element, options);
-    }
+    return add.call(this, type, listener, options);
   };
-  const tabs = ref(Array.from({ length: count }, (_, i) => `tab-${String.fromCharCode(97 + i)}`));
-  const active = ref(tabs.value[0]);
-  const optional = ref([]);
-  const end = ref(false);
-  const splitButtons = ref(true);
-  window.fixture = { optional, end, splitButtons };
-  const labels = { rows: "Rows", cols: "Cols", sendToOther: "Move", close: "Close tab" };
+  window.removeEventListener = function(type, listener, options) {
+    const i = listeners.findIndex(l => l.type === type && l.listener === listener && l.capture === capture(options));
+    if (i >= 0) listeners.splice(i, 1);
+    return remove.call(this, type, listener, options);
+  };
+  window.listenerSnapshot = () => listeners.slice();
+  window.listenersMatch = baseline => listeners.length === baseline.length && baseline.every(l => listeners.includes(l));
+  window.listenersAtRest = () => {
+    const baseline = window.gestureBaseline;
+    const extra = listeners.filter(l => !baseline.includes(l));
+    if (!baseline.every(l => listeners.includes(l))) return false;
+    // Arrange owns all input in capture, with the modal pair/blur and the scoped pointer/touch blocker.
+    if (!document.querySelector(".split-tabs--arranging")) return extra.length === 0;
+    const pointerTypes = ["pointerdown", "pointerup", "pointermove", "pointercancel", "pointerover", "pointerout", "pointerenter", "pointerleave",
+      "mousedown", "mouseup", "mousemove", "mouseover", "mouseout", "mouseenter", "mouseleave", "click", "auxclick", "dblclick", "contextmenu", "wheel",
+      "touchstart", "touchmove", "touchend", "touchcancel"];
+    const menuListeners = document.querySelector(".split-tabs-menu") ? 4 : 0;
+    return extra.length === 3 + pointerTypes.length + menuListeners && extra.some(l => l.type === "keydown" && l.capture)
+      && extra.some(l => l.type === "keyup" && l.capture) && extra.some(l => l.type === "blur" && !l.capture)
+      && pointerTypes.every(type => extra.some(l => l.type === type && l.capture));
+  };
+  window.frameLoads = {};
+  window.pointerLog = [];
+  window.pointerDowns = [];
+  window.commands = [];
+  window.writes = [];
+  window.sawGhost = false;
+  const mutations = new MutationObserver(records => {
+    if (records.some(record => [...record.addedNodes].some(node =>
+      node instanceof Element && node.classList.contains("split-tabs-drag-ghost")))) window.sawGhost = true;
+  });
+  mutations.observe(document.body, { childList: true, subtree: true });
+  for (const type of ["pointerup", "pointercancel"]) {
+    window.addEventListener(type, event => window.pointerLog.push(`${type}:${event.pointerType}`), true);
+  }
+  window.addEventListener("pointerdown", event => window.pointerDowns.push({
+    at: event.timeStamp, target: event.target.className, x: event.clientX, y: event.clientY,
+  }), true);
+  const params = new URLSearchParams(location.search);
+  const count = Number(params.get("n") || 4);
+  const tabs = ref(Array.from({ length: count }, (_, i) => String.fromCharCode(97 + i)));
+  const closeButton = ref(undefined);
+  const alwaysShow = ref(false);
+  const frameSlot = ref(false);
+  window.fixture = {
+    set frameSlot(value) { frameSlot.value = value; },
+    set alwaysShow(value) { alwaysShow.value = value; },
+    set closeButton(value) { closeButton.value = value; },
+    get closeButton() { return closeButton.value; },
+  };
   const controller = createSplitTabsController({
-    tabs, optional, active: { get: () => active.value, set: id => { active.value = id; } },
-    entryKey: "browser-fixture", storageKey: "browser-layouts",
+    tabs, optional: (params.get("optional") || "d").split(","), placeholderPrefix: "new:",
+    dividerSize: Number(params.get("dividerSize") || 6),
+    entryKey: "browser", storageKey: "browser-layouts",
+    storage: {
+      getItem: key => localStorage.getItem(key),
+      setItem: (key, value) => { window.writes.push([key, value]); localStorage.setItem(key, value); },
+      removeItem: key => localStorage.removeItem(key),
+    },
     minPaneWidth: 100, minPaneHeight: 80,
   });
   window.controller = controller;
-  const view = ref(null);
-  let externalCount = 0;
-  document.querySelector("#external-row").addEventListener("pointerdown", down => {
-    if (down.button !== 0) return;
-    const id = `external-${++externalCount}`;
-    function stop() {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-    }
-    function move(event) {
-      if (event.pointerId !== down.pointerId || Math.hypot(event.clientX - down.clientX, event.clientY - down.clientY) <= 6) return;
-      stop();
-      view.value.startExternalDrag(event, id, { label: "External item" }, labels, () => {
-        optional.value.push(id);
-        tabs.value.push(id);
-      });
-    }
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
-  });
-  window.pointerLog = [];
-  window.sawGhost = false;
-  new MutationObserver(records => {
-    if (records.some(record => [...record.addedNodes].some(node =>
-      node instanceof Element && node.classList.contains("split-tabs-drag-ghost")))) window.sawGhost = true;
-  }).observe(document.body, { childList: true, subtree: true });
-  for (const type of ["pointerdown", "pointerup", "pointercancel"]) {
-    window.addEventListener(type, event => window.pointerLog.push(`${type}:${event.pointerType}`), true);
-  }
-  createApp({
+  const layout = ref(null);
+  window.runLayout = command => layout.value.run(command);
+  window.touchPane = (pane, count) => {
+    const target = document.querySelector(`[data-pane-id="${pane}"]`);
+    const touches = Array.from({ length: count }, (_, identifier) => ({ identifier, target, clientX: 100, clientY: 100 }));
+    const event = new Event(count ? "touchstart" : "touchend", { bubbles: true, cancelable: true });
+    Object.defineProperties(event, { touches: { value: touches }, changedTouches: { value: touches } });
+    target.dispatchEvent(event);
+  };
+  const app = createApp({
     render: () => h(SplitTabs, {
-      ref: view, controller, labels: { divider: "Resize" },
-      stripLabels: labels,
+      controller, labels: { divider: "Resize", closeSelection: "Close selection", newPane: "New pane", renameInput: "Tab name",
+        arrangeMenu: "Arrange actions" },
+      arrangeMenuLabels: { splitRight: "Split right", done: "Done" },
+      stripLabels: { close: "Close" },
+      ref: layout,
+      ...(params.get("keymap") === "zoom" ? { keymap: { zoom: ["Alt+Shift+KeyZ"] } } : {}),
+      menuLabels: { menu: "Tab options", right: "Split right", left: "Split left", down: "Split down", up: "Split up",
+        inside: "Tab inside", move: "Move to", otherPane: "Other pane", rename: "Rename", close: "Close", noRoom: "No room", onlyTab: "Only tab" },
+      closeButton: closeButton.value,
+      alwaysShow: alwaysShow.value,
+      ...(params.get("chords") === "ctrl" ? {
+        pointerChords: { ...defaultPointerChords, toggle: "Ctrl+Alt+Shift", move: "Ctrl+Alt+Shift", rectangle: null },
+      } : {}),
+      onCommand: (name, result) => window.commands.push([name, result]),
     }, {
-      ...(end.value ? { pane: ({ pane }) => h(SplitTabStrip, {
-        controller, pane: pane.id, labels, alwaysShow: true, splitButtons: splitButtons.value,
-      }, {
-        end: () => h("button", { type: "button", onClick: () => controller.open("tab-l", pane.id) }, "Add tab"),
-      }) } : {}),
-      keep: () => [h(PickProbe), ...tabs.value.map(tab => h(SplitTabsKeep, { key: tab, tab, part: "body" },
-        () => h("div", { class: "content", style: "height:100%" }, `${tab} content`)))],
+      frame: () => frameSlot.value ? h("div", { id: "host-frame-slot", style: "width: 700px; height: 500px" }, "Host frame") : null,
+      undo: ({ undo }) => h("button", { id: "undo", type: "button", onClick: undo }, "Undo"),
+      ...(params.get("arrangeSlot") === "1" ? {
+        arrange: ({ done }) => h("button", { id: "done", type: "button", onClick: done }, "Done"),
+      } : {}),
+      ...(params.get("paneSlot") === "1" ? { pane: () => h(SplitTabsAnchor, { part: "body" }) } : {}),
+      // ?scroll=1 makes every view scrollable content, as a transcript under the fingers is.
+      keep: () => tabs.value.map(tab => h(SplitTabsKeep, { key: tab, tab, part: "body", overlay: params.get("ordinary") !== tab }, () =>
+        ["a", "b"].includes(tab)
+          ? h("iframe", { "data-frame": tab, title: `Frame ${tab}`, src: `/frame.html?id=${tab}${params.get("scroll") === "1" ? "&scroll=1" : ""}` })
+          : params.get("scroll") === "1"
+            ? h("div", { class: "content", "data-content": tab, style: "overflow: auto; min-height: 0" },
+              [h("div", { style: "height: 3000px" }, `${tab} content`)])
+            : h("div", { class: "content", "data-content": tab }, `${tab} content`))),
     }),
-  }).mount("#host");
+  });
+  app.mount("#host");
+  window.unmountFixture = () => { app.unmount(); controller.dispose(); mutations.disconnect(); };
+  window.fixtureReady = true;
 </script>
 </body>
 </html>

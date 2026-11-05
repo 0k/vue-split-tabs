@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Workbench view</title>
+</head>
+<body class="pane-document">
+  <div id="content" tabindex="0" aria-label="Pane content"></div>
+  <div class="pane-number" id="number"></div>
+  <output class="gesture-meter" id="meter"></output>
+  <section class="event-panel" id="event-panel" aria-labelledby="log-title">
+    <header><strong id="log-title"></strong><output id="keyboard"></output></header>
+    <ol id="event-log" aria-label="Events received by this iframe"></ol>
+  </section>
+  <script type="module" src="/pane.ts"></script>
+</body>
+</html>

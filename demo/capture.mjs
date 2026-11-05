@@ -1,116 +1,130 @@
 import assert from "node:assert/strict";
-import { access, mkdir, rm, stat } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { withBrowser, open, viewport, edge, reset, expectState, nestedEdge } from "./browser.mjs";
+import { withBrowser, open, viewport, clean, cast } from "./browser.mjs";
+import { scenarios } from "./scenarios.mjs";
 
 const images = new URL("../doc/images/", import.meta.url);
-const scratch = new URL("./.capture/", import.meta.url);
+const scratch = process.env.SPLIT_TABS_CAPTURE_SCRATCH
+  ? pathToFileURL(`${process.env.SPLIT_TABS_CAPTURE_SCRATCH}/`) : new URL("./.capture/", import.meta.url);
 const ffmpeg = process.env.FFMPEG ?? "/usr/bin/ffmpeg";
-try { await access(ffmpeg, constants.X_OK); }
-catch { throw new Error(`demo:capture requires ffmpeg at ${ffmpeg}; install it or set FFMPEG to its executable path.`); }
-
-function convert(args) {
-  const result = spawnSync(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", ...args], { encoding: "utf8" });
-  if (result.error || result.status !== 0) throw new Error(`ffmpeg failed: ${result.error?.message ?? result.stderr}`);
-}
+const ffprobe = process.env.FFPROBE ?? "/usr/bin/ffprobe";
+await access(ffmpeg, constants.X_OK);
+await access(ffprobe, constants.X_OK);
 await mkdir(images, { recursive: true });
-await rm(scratch, { recursive: true, force: true });
 await mkdir(scratch, { recursive: true });
-const saved = [];
+const path = (root, name) => fileURLToPath(new URL(name, root));
+function exec(command, args) {
+  const result = spawnSync(command, args, { encoding: "utf8", timeout: 60000 });
+  if (result.error || result.status !== 0) throw new Error(`${command}: ${result.error?.message ?? result.stderr}`);
+  return result.stdout;
+}
+function convert(args) { exec(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", ...args]); }
+function probe(file) {
+  return JSON.parse(exec(ffprobe, ["-v", "error", "-show_format", "-show_streams", "-of", "json", file]));
+}
+const options = { viewport, deviceScaleFactor: 1, locale: "en-US", colorScheme: "dark", reducedMotion: "reduce", hasTouch: true };
+const manifest = [];
 await withBrowser(async (browser, origin) => {
-  const context = await browser.newContext({ viewport, deviceScaleFactor: 1, locale: "en-US", colorScheme: "dark", reducedMotion: "reduce" });
+  const still = await browser.newContext(options);
   try {
-    const { page, errors } = await open(context, origin);
-    async function shot(name) {
-      await page.mouse.move(15, 15);
-      await page.screenshot({ path: fileURLToPath(new URL(name, images)), animations: "disabled" });
-      saved.push(name);
-      console.log(`Captured ${name}`);
-    }
-    await shot("demo-single.png");
-    await edge(page, "chart", "cols");
-    await shot("demo-columns.png");
-    await nestedEdge(page, "log", "chart", "cols");
-    await page.getByRole("separator").nth(1).dblclick();
-    await shot("demo-thirds.png");
-    await reset(page);
-    await edge(page, "chart", "cols");
-    await nestedEdge(page, "log", "chart", "rows");
-    await shot("demo-nested.png");
-    await reset(page);
-    await edge(page, "chart", "rows");
-    await shot("demo-rows.png");
-    await reset(page);
-    await edge(page, "chart", "cols", false);
-    // Keep the real pointer, ghost and labelled shade in the screenshot.
-    await page.screenshot({ path: fileURLToPath(new URL("demo-drag.png", images)) });
-    saved.push("demo-drag.png");
-    await page.keyboard.press("Escape");
-    await page.mouse.up();
-    await page.getByRole("button", { name: "Open tab menu" }).click();
-    await shot("demo-menu.png");
-    await page.keyboard.press("Escape");
-    await reset(page);
-    await edge(page, "chart", "cols");
-    await page.setViewportSize({ width: 390, height: 720 });
-    await expectState(page, { orientation: null }, "Capture narrow collapsed layout");
-    await page.getByRole("textbox", { name: "Notes draft" }).fill("A little room to think.\n\nDrag me anywhere.\nYour draft stays with you.");
-    await shot("demo-phone.png");
-    assert.deepEqual(errors, [], "Expected capture without runtime errors");
-  } finally { await context.close(); }
+    const { page, errors } = await open(still, origin);
+    await page.screenshot({ path: path(images, "demo-workbench.png"), animations: "disabled" });
+    assert.deepEqual(errors, []);
+    console.log("Captured demo-workbench.png");
+  } finally { await still.close(); }
 
-  const videoContext = await browser.newContext({
-    viewport, deviceScaleFactor: 1, locale: "en-US", colorScheme: "dark", reducedMotion: "reduce",
-    recordVideo: { dir: fileURLToPath(scratch), size: viewport },
-  });
-  let video;
-  try {
-    const { page, errors } = await open(videoContext, origin);
-    video = page.video();
-    // Presentation beats only: tests use condition polling, never these pauses.
-    const beat = () => page.waitForTimeout(1100);
-    await beat();
-    await page.getByRole("textbox", { name: "Notes draft" }).fill("A little room to think.\n\nSame draft. A new perspective.");
-    await beat();
-    await edge(page, "chart", "cols", false);
-    await beat();
-    await page.mouse.up();
-    await expectState(page, { orientation: "cols" }, "Video split");
-    await beat();
-    await nestedEdge(page, "log", "chart", "cols");
-    await beat();
-    await page.getByRole("separator").nth(1).dblclick();
-    await beat();
-    await page.getByRole("button", { name: "Merge panes", exact: true }).click();
-    await edge(page, "chart", "cols");
-    await nestedEdge(page, "log", "chart", "rows");
-    await beat();
-    await reset(page);
-    await page.getByRole("button", { name: "Open tab menu" }).click();
-    await beat();
-    await page.getByRole("menuitem", { name: "Checklist" }).click();
-    await beat();
-    await reset(page);
-    await beat();
-    assert.deepEqual(errors, [], "Expected recording without runtime errors");
-  } finally { await videoContext.close(); }
-  assert.ok(video, "Expected recorded video, observed none");
-  const input = await video.path();
-  const gif = fileURLToPath(new URL("demo.gif", images));
-  convert(["-i", input, "-t", "18", "-filter_complex",
-    "fps=8,scale=900:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=80:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4",
-    "-loop", "0", gif]);
-  assert.ok((await stat(gif)).size < 3_000_000, `Expected GIF < 3 MB, observed ${(await stat(gif)).size} bytes`);
-  for (const [index, second] of [2, 7, 9, 11].entries()) {
-    convert(["-ss", String(second), "-i", gif, "-frames:v", "1", fileURLToPath(new URL(`frame-${index + 1}.png`, scratch))]);
+  for (const scenario of scenarios) {
+    const context = await browser.newContext({ ...options, isMobile: scenario.name === "touch" });
+    const raw = await mkdtemp(path(scratch, `${scenario.name}-raw-`));
+    const samples = [];
+    let sampling = true;
+    let sampler;
+    let started;
+    let elapsed;
+    const beats = [];
+    try {
+      const { page, errors } = await open(context, origin);
+      started = performance.now();
+      sampler = (async () => {
+        while (sampling) {
+          const at = (performance.now() - started) / 1000;
+          const file = `${raw}/${samples.length}.png`;
+          await page.screenshot({ path: file, animations: "disabled" });
+          samples.push({ at, file });
+          if (sampling) await page.waitForTimeout(100);
+        }
+      })();
+      await cast(page, scenario.name === "touch" ? "Native touch / tablet" : `Workbench / ${scenario.name}`);
+      // Presentation pauses belong only to recordings; the shared tests pass a no-op.
+      async function pause() {
+        await page.waitForFunction(() => [...document.querySelectorAll("iframe")].every(el => el.contentWindow.ready));
+        await page.getByLabel("Last key or gesture").waitFor({ state: "visible" });
+        beats.push({ at: (performance.now() - started) / 1000 + 0.35, text: await page.getByLabel("Last key or gesture").textContent() });
+        await page.waitForTimeout(850);
+      }
+      await scenario.run(page, context, pause);
+      await clean(page);
+      assert.deepEqual(errors, [], `Capture ${scenario.name}: runtime errors`);
+      elapsed = (performance.now() - started) / 1000;
+    } finally {
+      sampling = false;
+      let sampled = false;
+      try { await sampler; sampled = true; }
+      finally {
+        await context.close();
+        if (!sampled || elapsed === undefined) await rm(raw, { recursive: true });
+      }
+    }
+    assert.ok(samples.length > 1 && elapsed, `Recording ${scenario.name} finished`);
+    try {
+      const seconds = Math.min(9.5, Math.max(6, elapsed));
+      const speed = seconds / elapsed;
+      const input = `${raw}/frames.txt`;
+      const concat = samples.flatMap((sample, i) => [
+        `file '${sample.file}'`, `duration ${Math.max(0.01, (samples[i + 1]?.at ?? elapsed) - sample.at).toFixed(4)}`,
+      ]);
+      await writeFile(input, `ffconcat version 1.0\n${concat.join("\n")}\nfile '${samples.at(-1).file}'\n`);
+      const gif = path(images, `clip-${scenario.name}.gif`);
+      convert(["-f", "concat", "-safe", "0", "-i", input, "-t", seconds.toFixed(3), "-filter_complex",
+        `setpts=${speed.toFixed(6)}*(PTS-STARTPTS),fps=10,scale=900:-1:flags=lanczos,split[a][b];` +
+        "[a]palettegen=max_colors=256:stats_mode=full:reserve_transparent=0[p];" +
+        "[b][p]paletteuse=dither=bayer:bayer_scale=4", "-loop", "0", gif]);
+      const size = (await stat(gif)).size;
+      const info = probe(gif);
+      assert.ok(size < 1_500_000, `${scenario.name}: ${size} bytes exceeds 1.5 MB`);
+      assert.ok(info.streams[0].width <= 900);
+      assert.ok(Number(info.format.duration) >= 5 && Number(info.format.duration) <= 10, `${scenario.name}: GIF duration`);
+      const frames = [];
+      const captions = [];
+      for (let i = 0; i < 4; i++) {
+        const beat = beats[Math.round(i * (beats.length - 1) / 3)];
+        const second = Math.min(seconds - 0.2, beat.at * speed);
+        const output = path(scratch, `clip-${scenario.name}-review-${i + 1}.png`);
+        convert(["-ss", second.toFixed(3), "-i", gif, "-frames:v", "1", output]);
+        frames.push(output); captions.push(beat.text);
+      }
+      convert([...frames.flatMap(frame => ["-i", frame]), "-filter_complex",
+        "[0:v]scale=450:-1[a];[1:v]scale=450:-1[b];[2:v]scale=450:-1[c];[3:v]scale=450:-1[d];" +
+        "[a][b]hstack[top];[c][d]hstack[bottom];[top][bottom]vstack", "-frames:v", "1", path(scratch, `clip-${scenario.name}-review.png`)]);
+      manifest.push({ name: `clip-${scenario.name}.gif`, bytes: size, seconds: Number(info.format.duration), frames, captions });
+      console.log(`Captured clip-${scenario.name}.gif: ${size} bytes, ${info.format.duration}s`);
+    } finally { await rm(raw, { recursive: true }); }
   }
-  convert(["-i", gif, "-vf", "fps=1,scale=450:-1,tile=6x3", "-frames:v", "1",
-    fileURLToPath(new URL("storyboard.png", scratch))]);
-  await rm(input);
-  saved.push("demo.gif");
 });
-for (const name of saved) console.log(`${name}\t${(await stat(new URL(name, images))).size} bytes`);
-console.log("GIF review frames: demo/.capture/frame-{1,2,3,4}.png (ignored; remove after review)");
-console.log("GIF one-second storyboard: demo/.capture/storyboard.png");
+await writeFile(new URL("manifest.json", scratch), `${JSON.stringify(manifest, null, 2)}\n`);
+
+// Remove only named, obsolete outputs, and only once the README no longer links them.
+const readme = await readFile(new URL("../README.org", import.meta.url), "utf8");
+const legacy = ["demo-single.png", "demo-columns.png", "demo-thirds.png", "demo-nested.png", "demo-rows.png",
+  "demo-drag.png", "demo-menu.png", "demo-phone.png", "demo.gif"];
+for (const name of legacy) {
+  assert.ok(!readme.includes(name), `README still references ${name}`);
+  try { await rm(new URL(name, images)); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
+}
+for (const clip of manifest) console.log(`${clip.name}\t${clip.bytes} bytes\n${clip.frames.join("\n")}`);
+console.log(`demo-workbench.png\t${(await stat(new URL("demo-workbench.png", images))).size} bytes`);
+console.log(`Review manifest: ${path(scratch, "manifest.json")}`);
