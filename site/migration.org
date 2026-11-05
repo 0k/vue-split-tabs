@@ -1,0 +1,83 @@
+#+TITLE: Move the model, not just the names.
+
+Version 0.3 makes layouts and inner bars first-class tab content. Existing
+stored 0.1 and 0.2 layouts migrate on read, but callers must adopt the
+tree-and-zone APIs. Storage compatibility does not make old method calls valid.
+
+* 0.2 → 0.3 mapping
+
+This mapping is shared with the README's breaking-change reference:
+
+@@MIGRATION@@
+
+* Migrate an integration in layers
+
+1. Keep your storage identity and host tab ids so the controller can read
+   the existing table. Do not rewrite old entries by hand; use the reader's
+   validation and migration path.
+2. Replace old placement/split calls with a source and zone. A move carries
+   an existing view or node; ~split(side)~ creates a placeholder and returns
+   its id. These are deliberately different operations.
+3. REMOVE strips from ~#pane~ and ~#frame~. The library renders bars beside
+   content. Move strip labels to root ~stripLabels~, ~closeButton~,
+   ~alwaysShow~, ~tabClass~ and ~iconClass~ to root props; move ~#tab~ to the
+   root and ~#end~ to ~#bar-end { tabSet }~ (an effective tab-set object).
+   Pane slots now render content/anchors only; frame slots add content before
+   the recursive layout. Use ~alwaysShow=true~ or a per-set function to keep
+   an add control available on one-tab sets.
+4. Remove per-tab split-button expectations. Supply a keymap, drag targets,
+   and labelled context-menu actions instead.
+5. Verify middle drops as /inside/ and bar drops as /next-to/. Existing UI
+   hints that call both “move to pane” should explain the level instead.
+6. Test narrow containers and restore: persist ~intent~, not the effective
+   collapsed presentation. Check focus marks over iframe content as well as
+   ordinary panes.
+
+Replace whole-box ~[data-pane-id]~ selectors with
+~.split-tabs-tabset[data-tabset-id]~. The pane attribute now identifies only
+content. Bars use ~.split-tabs-bar[data-bar-id]~ and retain strip hooks.
+Set ~barThickness~ for actual top/bottom bar height; the root writes
+~--split-tabs-bar-thickness~. Content opacity and marks exclude bars.
+Storage, algebra, Keep keys and frame-helper setup do not change.
+
+* Translate placement into a destination
+
+#+begin_src typescript
+// Move an existing view beside the currently focused pane.
+controller.move(
+  { view: 'preview' },
+  { kind: 'split', target: controller.focus.value, side: 'right' },
+);
+
+// Add the view beside entries in a specific bar.
+controller.move(
+  { view: 'preview' },
+  { kind: 'bar', target: destinationTabSet, index: null },
+);
+
+// Create a new space; the host supplies its eventual content.
+const result = controller.split('bottom');
+if (result.ok && result.view) {
+  tabs.value = [...tabs.value, 'outline'];
+  controller.replace(result.view, 'outline');
+}
+#+end_src
+
+The host defines ~destinationTabSet~ and the reactive ~tabs~ list here.
+Use ~canMove~ to show availability before offering an action and handle the
+actual ~move~ result too: a reactive host can change between preview and drop.
+
+* What the reader preserves
+
+The 0.2 migration maps old pane leaves to tab sets, retains cuts and ratios,
+and uses saved order to place assigned and unassigned ids. In the controller
+specification, a stored columns tree with ~firstActive: "d"~ and order
+~["d", "c", "b", "a"]~ becomes ~H[(*d b) (c *a)]~, retaining ratio 0.3.
+An old two-pane rows entry with b in the second pane becomes
+~V[(*a c d) b]~. These are read migrations, not a requirement for hosts
+to manufacture v3 storage objects themselves.
+
+Review [[file:layout-model.html][The layout model]] for optional visibility and focus
+semantics, then use the [[file:api.html][complete controller declaration]] to update
+TypeScript callers. The [[file:workbench/][Workbench]] makes the new nested levels and
+drop behavior observable before integrating them into an application.

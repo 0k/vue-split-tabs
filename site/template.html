@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A practical guide to Vue 3 split layouts, nested tab sets, and persistent iframe content.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+  <title>$pagetitle$ · Vue split tabs</title>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="masthead">
+  <a class="brand" href="index.html"><span class="brand-mark" aria-hidden="true">▥</span> vue-split-tabs</a>
+  <div class="header-links"><a href="workbench/">Live Workbench ↗</a><a href="https://github.com/0k/vue-split-tabs">GitHub</a>
+  <a href="https://www.npmjs.com/package/@0k/vue-split-tabs">npm</a></div>
+</header>
+<div class="shell">
+  <aside class="sidebar"><p class="eyebrow">The field guide / 0.3</p>
+    <nav aria-label="Chapters">$nav$</nav>
+    <p class="sidebar-note">Your content.<br>Your layout.<br>Nothing remounted.</p>
+  </aside>
+  <main id="main">
+    <div class="page-heading"><p class="eyebrow">Vue 3 · Chapter $chapter$</p><h1>$title$</h1></div>
+    $if(toc)$<details class="contents"><summary>On this page</summary>$table-of-contents$</details>$endif$
+    <article>$body$</article>
+    <nav class="pagination" aria-label="Previous and next chapters">$pagination$</nav>
+    <footer>Content-agnostic layouts. Host-owned experiences.
+      <a href="https://github.com/0k/vue-split-tabs/blob/main/LICENSE">MIT licensed.</a></footer>
+  </main>
+</div>
+</body>
+</html>

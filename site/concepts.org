@@ -1,0 +1,117 @@
+#+TITLE: A vocabulary for space.
+
+A tab is not necessarily a document, and a split is not necessarily the
+root. The model distinguishes the content your host supplies from the
+containers that arrange it. That distinction makes nested layouts predictable.
+
+* Content and containers
+
+| Term | Meaning in this library |
+|------+-------------------------|
+| View | One host id, or a placeholder id. Content belongs to the host. |
+| Placeholder | A controller-created view with ~placeholderPrefix~. Fill it with ~replace(oldId, newId)~. |
+| Tab set | A bar and the entry it currently shows. Entries can hold a view, a cut, or another tab set. |
+| Pane | The content area of a tab set showing a view. Its bar sits outside it. |
+| Bar | Library-owned tab controls beside pane/frame content, on any side. |
+| Frame | A tab set showing a layout or inner bar. Its bar sits outside frame content. |
+| Layout tab | An entry whose content is a cut: several panes behind one tab. |
+| Inner bar | A tab set held inside another tab set's entry. |
+| Cut / divider | A cut divides an area into two parts. ~cols~ places them side by side; ~rows~ stacks them. The divider is its resize control. |
+
+A one-tab set usually has no visible bar, so its pane fills the whole box.
+That container is still a tab set in the model, so a second tab can be added
+without changing the meaning of its id. Focus, selection, dimming, covers and
+pick badges affect content, not bars.
+An inner bar with two or more tabs remains independent of its outer bar.
+
+* Attention and command targets
+
+| Term | Stored state or action |
+|------+------------------------|
+| Focus | The one pane that receives layout commands without a selection. The controller remembers its view. |
+| Selection | Several panes chosen together; memory-only. |
+| Group | Rebuild the cuts so a rectangular selection becomes one node. |
+| Scope | The area a pane is a tile of; ~scopes(pane)~ returns the pane and its surrounding rendered layouts/tab sets, innermost first. |
+| Bar focus | The bar whose label was last clicked; it directs tab-next and bar-side commands. |
+| Target | The selection grouped first, else the focused pane, subject to the command's own rules. |
+
+A normal press in content focuses its pane and clears selection and bar
+focus, even if it was already focused. This makes the next layout action
+local again. The visible focus mark and keyboard focus move together for
+layout keys. See [[file:iframes.html][the iframe chapter]] for how that crosses documents.
+
+* Read the notation
+
+~notation(tree)~ describes a saved tree. ~controller.notation.value~ is a
+reactive readout of the working view of the tree, including visibility and
+zoom. Neither notation is a replacement for storing ~intent~.
+
+| Notation | Read it as |
+|----------+------------|
+| ~H[a b]~ | Side-by-side cut: a on the left, b on the right. |
+| ~V[a b]~ | Stacked cut: a on top, b below. |
+| ~(a *b)~ | One bar of views, currently showing b. The a entry is not visible content. |
+| ~T{H[a b] ¦ *c}~ | A bar holding a two-pane layout and a view c; c is shown. The actual separator in the notation is a vertical pipe. |
+
+#+begin_export html
+<svg class="diagram" viewBox="0 0 700 290" role="img" aria-label="H places a and b side by side. V stacks them. A bar showing b hides a. A layout bar can show c instead of its split.">
+<rect x="10" y="32" width="150" height="90"/><rect x="166" y="32" width="150" height="90"/>
+<text x="76" y="84">a</text><text x="232" y="84">b</text><text x="10" y="22">H[a b]</text>
+<rect x="360" y="32" width="300" height="42"/><rect x="360" y="80" width="300" height="42"/>
+<text x="500" y="60">a</text><text x="500" y="109">b</text><text x="360" y="22">V[a b]</text>
+<rect x="10" y="175" width="80" height="30"/><rect x="90" y="175" width="80" height="30"/>
+<rect x="10" y="211" width="306" height="65"/><text x="35" y="197">a</text><text x="110" y="197">*b</text>
+<text x="150" y="253">b</text><text x="10" y="161">(a *b)</text>
+<rect x="360" y="175" width="155" height="30"/><rect x="515" y="175" width="100" height="30"/>
+<text x="385" y="197">H[a b]</text><text x="548" y="197">*c</text>
+<rect x="360" y="211" width="300" height="65"/><text x="500" y="253">c</text><text x="360" y="161">T{H[a b] | *c}</text>
+</svg>
+#+end_export
+
+The star means /shown in this bar/, not keyboard focus or pane selection.
+For example, ~T{*H[a b] | c}~ shows both a and b, while c stays behind the
+outer bar. A single view is printed simply as ~a~; its hidden one-tab bar
+does not clutter the readout.
+
+* Worked example: regroup a top row
+
+The algebra specification starts with ~H[V[1 3] V[2 4]]~. Each column is
+one branch. Select panes 1 and 2 and call ~group()~: the result has
+~kind: "exact"~ and the tree becomes ~V[H[1 2] H[3 4]]~.
+No pane changes its place in the picture; only the ownership of the cuts changes.
+
+#+begin_export html
+<svg class="diagram" viewBox="0 0 700 225" role="img" aria-label="Before and after grouping: the same four rectangles, with the top row outlined as a group after regrouping.">
+<rect x="10" y="35" width="140" height="75"/><rect x="156" y="35" width="140" height="75"/>
+<rect x="10" y="116" width="140" height="75"/><rect x="156" y="116" width="140" height="75"/>
+<text x="75" y="80">1</text><text x="220" y="80">2</text><text x="75" y="161">3</text><text x="220" y="161">4</text>
+<text x="10" y="22">Columns first</text>
+<rect x="380" y="35" width="140" height="75"/><rect x="526" y="35" width="140" height="75"/>
+<rect x="380" y="116" width="140" height="75"/><rect x="526" y="116" width="140" height="75"/>
+<rect x="375" y="30" width="296" height="85" style="fill:none;stroke-width:3"/>
+<text x="445" y="80">1</text><text x="590" y="80">2</text><text x="445" y="161">3</text><text x="590" y="161">4</text>
+<text x="380" y="22">Rows first; top row grouped</text>
+</svg>
+#+end_export
+
+Now ~tabNext()~ puts a fresh view 5 beside that entire group:
+~V[T{H[1 2] | *5} H[3 4]]~. Select the layout tab and the top two panes
+reappear together. Close 5 and the now-unnecessary outer layout bar dissolves.
+Selecting only diagonal panes 1 and 4 instead is refused with
+~not-groupable~: panes 3 and 2 occupy the rectangle between them.
+
+* Worked example: placeholders and nested bars
+
+The controller tests start with host ids a, b, c, d, make d optional, and
+use ~placeholderPrefix: "new:"~. Initially the notation is ~(*a b c)~.
+~split("right")~ produces ~H[(*a b c) new:1]~ and focuses new:1.
+~replace("new:1", "d")~ fills that pane and opens optional d.
+
+Calling ~tabNext()~ and then ~tabInside()~ produces
+~H[(*a b c) T{d | *(new:2 *new:3)}]~. The outer right bar owns d and an
+inner bar; the inner bar owns new:2 and new:3. Closing new:2 dissolves that
+one-tab inner bar, leaving ~H[(*a b c) (d *new:3)]~.
+
+These examples come from the repository's ~test/algebra.test.ts~ and
+~test/controller.test.ts~. The [[file:layout-model.html][layout model]] explains the rules
+that make their transformations consistent.

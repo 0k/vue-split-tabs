@@ -1,0 +1,102 @@
+#+TITLE: Your host sets the tone.
+
+The library provides geometry and class hooks, not a required palette or
+typography. Set CSS custom properties on the root or a host ancestor, and
+keep layout dimensions aligned with the controller's size estimates.
+
+* Focus is visible above the content
+
+Focus and selection marks are positioned elements above overlay content,
+not just pane borders hidden under an iframe. The hooks are
+~.split-tabs-focus~ and ~.split-tabs-selected-mark~, with ~data-pane-of~.
+They appear when there are at least two panes. ~data-pane-id~ belongs to
+actual pane hit targets, not to these decorative marks.
+The pane excludes the bar: ~.split-tabs-tabset[data-tabset-id]~ is the outer
+box, ~.split-tabs-bar[data-bar-id]~ is the sibling bar (with existing strip
+hooks), and ~.split-tabs-pane[data-pane-id]~ is content only.
+
+Choose one of these recipes on a host class applied around the root.
+Selected opacity can be adjusted independently when selection should remain
+more prominent than other unfocused panes.
+
+** Border only
+
+#+begin_src css
+.workspace {
+  --split-tabs-focus-border: 2px solid #168b77;
+  --split-tabs-unfocused-opacity: 1;
+  --split-tabs-focused-opacity: 1;
+  --split-tabs-selected-border: 2px dashed #bd7d16;
+}
+#+end_src
+
+** Dim other panes
+
+#+begin_src css
+.workspace {
+  --split-tabs-focus-border: none;
+  --split-tabs-unfocused-opacity: 0.55;
+  --split-tabs-focused-opacity: 1;
+  --split-tabs-selected-opacity: 0.85;
+}
+#+end_src
+
+Opacity applies to ~.split-tabs-pane-content~ and its matching
+~.split-tabs-keep--overlay~ content. Custom dimming must target those wrappers,
+never ~.split-tabs-pane~: pane opacity creates a stacking context that traps
+covers and badges beneath the overlay Keep layer.
+Bars remain undimmed, with their own bar-focus effect. Pane covers, badges,
+focus/selection borders and drop quarters likewise exclude bars.
+The grouping outline is clipped to selected pane rectangles even with mixed
+bar sides; its close button stays inside a selected pane rather than a bar.
+
+** Border and dimming together
+
+#+begin_src css
+.workspace {
+  --split-tabs-focus-border: 3px solid #168b77;
+  --split-tabs-focus-radius: 4px;
+  --split-tabs-unfocused-opacity: 0.7;
+  --split-tabs-focused-opacity: 1;
+  --split-tabs-selected-border: 2px dashed #bd7d16;
+  --split-tabs-selected-opacity: 0.9;
+}
+#+end_src
+
+Choose contrast for your own light/dark themes and the content being
+embedded; the sample colours are host choices, not library defaults.
+The [[file:workbench/][Workbench]] lets you compare all three strategies over live iframes.
+
+* Geometry and stacking
+
+Self-drop previews distinguish existing content on the dropped half from
+the fresh placeholder opposite. The latter uses
+~.split-tabs-drop-shade.split-tabs-drop-preview--new~,
+~--split-tabs-drop-new-background~ (default ~rgba(127, 127, 127, 0.08)~),
+and ~--split-tabs-drop-new-shadow~ (default ~inset 0 0 0 2px currentColor~).
+Its text is host-only ~labels.newPane~; missing wording leaves it empty.
+Both halves use ~data-refused~ and the existing refusal background when
+minimum sizes cannot fit.
+
+The root writes ~--split-tabs-divider-size~ and
+~--split-tabs-side-bar-width~ inline from controller options. A rendered
+side bar also has its component-supplied ~--split-tabs-bar-width~. Keep
+those names available in custom styles rather than hard-coding a competing
+width. A divider option below 1 px, NaN, or infinity throws at creation;
+its grab zone remains at least 8 px.
+
+Top/bottom bars use ~barThickness~ as their actual height, written inline as
+~--split-tabs-bar-thickness~; left/right bars use
+~sideBarWidth~ and persisted widths. If a host changes tab dimensions, update
+the corresponding controller options too. Raise stacking variables only
+with a clear layer policy: the focus mark must stay above overlay content,
+and drag covers must still intercept layout gestures.
+
+* CSS variable reference
+
+This table is extracted from README.org at build time. The builder scans
+~src/style.css~ and fails if any ~--split-tabs-*~ variable is undocumented,
+so a new style hook cannot silently disappear from this reference. Defaults
+below describe the library; the Workbench supplies its own theme.
+
+@@CSS-TABLE@@

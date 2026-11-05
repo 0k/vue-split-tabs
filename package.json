@@ -32,7 +32,9 @@
     "demo:build": "npm run build && vue-tsc --noEmit -p demo/tsconfig.json && vite build --configLoader runner --config demo/vite.config.ts",
     "demo:test": "npm run demo:build && node demo/test.mjs",
     "demo:capture": "npm run demo:build && node demo/capture.mjs",
-    "check": "npm run test && npm run typecheck && npm run build && node test/build.mjs && node test/types.mjs && npm run test:browser && npm run demo:test"
+    "site:build": "node site/build.mjs",
+    "site:test": "npm run site:build && node site/test.mjs",
+    "check": "npm run test && npm run typecheck && npm run build && node test/build.mjs && node test/types.mjs && npm run test:browser && npm run demo:test && npm run site:test"
   },
   "peerDependencies": { "vue": "^3.5.3" },
   "devDependencies": {

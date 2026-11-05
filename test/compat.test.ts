@@ -56,7 +56,7 @@ describe("compatibility and packaging", () => {
   });
 
   it("public docs warn which default chords take their host-field characters", () => {
-    for (const path of ["README.org"]) {
+    for (const path of ["README.org", "site/interaction.org"]) {
       const docs = readFileSync(path, "utf8");
       expect(docs).toMatch(/~pick~, ~move~, and ~arrange~ always succeed; ~tabNext~ and ~tabInside~ succeed/);
       expect(docs).toContain("Option+Shift+M/V/A and Option+Shift+T/I");

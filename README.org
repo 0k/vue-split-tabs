@@ -1,5 +1,7 @@
 #+TITLE: @0k/vue-split-tabs
 
+Documentation website: [[https://0k.github.io/vue-split-tabs/][the extended guide and live Workbench]].
+
 * Purpose
 
 =@0k/vue-split-tabs= is a content-agnostic Vue 3 split and tab layout. The

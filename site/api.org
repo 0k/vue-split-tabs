@@ -1,0 +1,277 @@
+#+TITLE: A small boundary. An explicit API.
+
+Use the controller for layout intent and commands; use components for
+rendering, input, and Keep anchors. Imports below are from
+=@0k/vue-split-tabs= unless the separate frame entry is named.
+
+* Create and dispose
+
+~createSplitTabsController(options: SplitTabsOptions): SplitTabsController~
+creates watchers and a reactive layout. The root measures its container;
+headless controller users can set dimensions with ~setContainerSize~.
+Dispose the controller when its owning host unmounts. Import the separate
+~@0k/vue-split-tabs/style.css~ once; the JavaScript entry does not import it.
+
+The options table below is shared with the README reference:
+
+@@OPTIONS@@
+
+~tabs~, ~optional~, and ~entryKey~ accept Vue values, refs, or getters as
+specified. The host must register a real new id before replacing a
+placeholder with it. Keep placeholder prefixes distinct from application ids.
+
+* Reactive members and exact method signatures
+
+Arrange-only root props:
+
+- ~arrangeExitKeys?: readonly string[] | null~, default ~['KeyQ']~, added to
+  ~exitKeys~ only during arrange mode; ~null~ and ~[]~ add none.
+- ~arrangeMenuLabels?: SplitTabsArrangeMenuLabels~, default empty: optional
+  item labels plus ~restore~ and ~reasons?: Partial<Record<SplitTabsReason,
+  string>>~. Missing labels hide controls. ~labels.arrangeMenu?: string~
+  supplies the menu button's accessible name and enables it.
+- ~arrangeMenuItems?: readonly SplitTabsArrangeMenuItem[]~, default
+  ~['splitRight', 'splitLeft', 'splitBelow', 'splitAbove', 'tabNext',
+  'tabInside', 'group', 'zoom', 'barSide', 'close', 'undo', 'done']~.
+  ~restore~ is the zoomed-state label, not an item id.
+- ~#arrange { run, done }~ remains host-positioned. Every arrange exit clears
+  selection and bar focus. The arrange menu is hidden while dragging.
+
+~canTarget(command: SplitTabsTargetCommand): SplitTabsResult~ tests the
+target commands above (excluding ~undo~ and ~done~) on a disposable
+workspace without saving, emitting host changes or allocating real ids.
+~run('splitLeft')~ and ~run('splitAbove')~ create placeholder splits with no
+default keyboard binding, alongside existing ~splitRight~ and ~splitBelow~.
+
+The following declaration is extracted directly from ~src/controller.ts~.
+It includes every public member and method, not a hand-maintained subset.
+Computed refs use ~.value~ in JavaScript; the numbers ~dividerSize~ and
+~sideBarWidth~ and ~barThickness~ are readonly configuration, not refs.
+
+@@CONTROLLER@@
+
+Read ~panes~ for leaf presentation and ~frames~ for bars surrounding a
+layout or inner bar. ~cuts~ and ~tabSets~ are maps by stable ids.
+~layout~ includes the effective geometry; ~intent~ is the persistence
+representation. ~plan~ previews grouping rather than applying it.
+~restoredActive~ exposes a usable stored focused view when available.
+
+~rename(key: string, title: string): SplitTabsResult~ trims titles; empty
+clears, an unknown key returns ~{ ok: false, reason: 'unknown' }~. A changed
+title writes storage once. ~titleOf(key: string): string | null~ is reactive
+when read in a Vue render or computed and returns null when unset or removed.
+
+~focusPane~ clears selection and bar focus, whereas ~focusDirection~ can
+extend selection. ~select(tabSet, key)~ shows an entry in any visible bar;
+~open~ manages optional views. ~setRatioLive~ and ~setBarWidthLive~ are
+transient drag updates; their committing partners save changes. ~merge~
+brings views into one tab set. See [[file:layout-model.html][The layout model]] for the
+visibility, close, and persistence invariants behind these methods.
+
+* Move sources and destination zones
+
+#+begin_src typescript
+type SplitTabsSource =
+  | { view: string }
+  | { node: string }
+  | { selection: true };
+
+type SplitTabsZone =
+  | { kind: 'bar'; target: string; index: number | null }
+  | { kind: 'inside'; target: string }
+  | { kind: 'split'; target: string; side: Side };
+
+type Side = 'top' | 'right' | 'bottom' | 'left';
+#+end_src
+
+~bar.index~ counts visible tab slots; ~null~ appends. ~target~ is a node
+id, with ~"root"~ accepted for splitting the whole area. A selection source
+uses the current selection and groups it first. ~canMove~ is the dry run.
+
+#+begin_src typescript
+const target = controller.panes.value[0]?.id;
+if (target) {
+  const zone = { kind: 'split', target, side: 'right' } as const;
+  const preview = controller.canMove({ view: 'preview' }, zone);
+  if (preview.ok) controller.move({ view: 'preview' }, zone);
+}
+#+end_src
+
+~insert(id, zone, register?)~ accepts an external view. Its optional
+synchronous callback registers the id in host tabs. Do not change controller
+intent inside that callback. The pointer drag layer resolves a valid drop
+before invoking its external handoff; calling ~insert~ directly is not the
+same as previewing a pointer target first.
+
+* Results and reasons
+
+Success is ~{ ok: true, kind?, node?, view? }~. Failure is
+~{ ok: false, reason, nodes? }~. Test ~ok~ to narrow the result before
+reading its reason. The host maps reasons to displayed messages; there are
+no built-in translated strings.
+
+| Reason | Meaning to handle in a host |
+|--------+-----------------------------|
+| ~selection-too-small~ | A group needs more selected panes. |
+| ~not-groupable~ | The selection cannot form an allowed rectangle; inspect ~nodes~. |
+| ~no-room~ | The destination cannot fit the requested split. |
+| ~into-itself~ | The source would contain its own destination. |
+| ~nothing-to-move~ | The operation has no item to relocate. |
+| ~no-bar~ | No applicable visible bar exists. |
+| ~no-split~ | No applicable divider exists. |
+| ~edge~ | Focus has no neighbour in that direction. |
+| ~zoomed~ | Already zoomed for an operation requiring otherwise. |
+| ~not-zoomed~ | Restore was requested without a zoom. |
+| ~fills-area~ | The requested zoom target already fills the area. |
+| ~not-closable~ | The target contains visible non-closable views; inspect ~nodes~. |
+| ~unknown~ | An id or target is unavailable, or undo has no snapshot. |
+| ~at-limit~ | Reorder or resize cannot advance further. |
+
+Grouping success kinds include ~single~, ~already~, ~exact~, and ~snap~;
+the preview ~SplitTabsPlan.kind~ also includes ~error~. A plan's ~panes~,
+~intruders~, and ~moved~ explain what the preview means. Do not use
+human-readable error text as program logic.
+
+* Components, slots, and events
+
+~move~ and ~canMove~ results may carry ~selfSplit: true~, including a refused
+~no-room~ preview. On success ~node~ and ~view~ identify the newly focused
+placeholder, opposite the dropped side. Root ~labels.newPane?: string~ is
+the optional host-supplied preview label. ~TabDropTarget.newPane?~ carries
+the opposite half's ~PreviewRect~ alongside its content ~shade~.
+
+@@COMPONENTS@@
+
+The root's ~undoTimeout~ defaults to 8000 ms, ~closeButton~ to ~active~,
+and key/pointer policies to their exported defaults. ~frameOrigins~ defaults
+to the host's own origin. Missing control labels hide those controls.
+The ~command~ event's name is a ~SplitTabsCommand~ or one of
+~rename~, ~fourFingerHold~, ~pinchOut~, ~pinchIn~; its second argument is a
+~SplitTabsResult~. The root ref's ~run(command): void~ reports non-null
+command results through that event.
+
+| Root ref method | Signature and result |
+|-----------------+----------------------|
+| ~startRename~ | ~(key: string): boolean~; opens the existing inline editor with the current title; false if unavailable. |
+
+Use ~startRename~ from a host-owned tab menu. It returns false when the key
+is unknown, ~renamable~ disables it, or the tab has no rendered, visible bar
+(including a hidden single-tab bar). In those cases the host should fall back
+to its own prompt and commit with ~controller.rename(key, title)~. Opening
+the editor writes nothing; Enter/blur commits report ~command('rename', result)~.
+
+~exitKeys?: readonly string[] | null~ defaults to ~defaultExitKeys~:
+~['Escape', 'Ctrl+KeyG', 'Ctrl+KeyD']~. It is independent of ~keymap~;
+~[]~ or ~null~ disables it. Strict physical chords exit the innermost mode
+in capture phase and consume down/repeats/up; outside modes they are inert
+unless separately command-bound. See [[file:interaction.html][Unified modal exits]].
+The ~#arrange { run, done }~ slot is the place for a visible host-labelled
+Done control calling ~done()~; no library string is supplied.
+
+The root owns every rendered bar, outside pane/frame content. Root
+~stripLabels~, ~closeButton~, ~tabClass~ and ~iconClass~ customize it;
+~#tab { id, active, kind, views, title }~ supplies labels. ~title~ is the
+custom title or null; use ~title ?? defaultLabel~ in host slots.
+~#bar-start { tabSet }~
+and ~#bar-end { tabSet }~ add host controls. ~alwaysShow~ accepts a boolean
+or ~(tabSet: SplitTabsTabSet) => boolean~; request a visible bar for sets
+whose add controls must remain available with one tab. End slots hide with
+the bar. The policy receives the tab set and must not read the controller;
+use the argument's identity or tabs instead. Projection-derived reads during
+policy evaluation throw a ~split-tabs:~ error. To show bars only when split,
+compute a boolean in the host render: ~:always-show="controller.hasSplit.value"~.
+~hasSplit~ counts visible panes in the unzoomed folded working tree, before
+size collapse, independently of container size and ~alwaysShow~. Zoom does
+not change it. ~isSplit~ instead counts rendered panes after zoom and collapse.
+Never drive ~alwaysShow~ from rendered-layout values (~isSplit~, ~panes~,
+~fits~, ~layout~, etc.), even through a host-render boolean: bars change
+minima and can cause an endless split/collapse feedback loop.
+The policy is presentation-only and feeds all bar minima.
+Inline arrows are safe when the HOST RENDER reads size-independent controller
+members such as ~hasSplit~, not the policy itself: a fresh function with
+unchanged results does not invalidate the layout, while changed results
+update bars live. A shown one-tab bar is also a bar-side command target;
+clicking its label sets bar focus.
+
+~SplitTabStrip~ remains exported for standalone navigation. Plain mode takes
+host ~tabs~ and ~active~ and emits ~select(id)~; controlled mode can take
+an explicit ~tabSet~. Never put one inside root pane/frame slots. Keep
+anchors belong in content slots; persistent content belongs in ~#keep~.
+The optional ~#frame~ slot adds an absolutely positioned layer over the frame
+content, not a bar. It takes no space from the recursive layout. The layer
+defaults to ~pointer-events: none~; set ~pointer-events: auto~ on host controls
+that should receive presses.
+~setAlwaysShow~ is available to headless controller users; while mounted the
+root manages it and resets it to false on unmount.
+
+~renamable?: boolean | ((key: string) => boolean)~ defaults to true on the
+root, controlled standalone strips and menus. It disables editing UI, not
+the controller API. Double-click edits a label; the host-labelled ~rename~
+menu item opens the same inline editor after a touch hold. Root
+~labels.renameInput?: string~ supplies its accessible name; standalone strips
+use ~labels.renameInput~ too. No built-in visible strings or new CSS variables.
+Enter and blur commit; Escape cancels editing only, without exiting layout
+modes. The root reports ~command('rename', result)~ for UI commits.
+Standalone ~SplitTabsMenu~ emits ~rename(key: string)~ and ~close~;
+the root handles the rename event, standalone hosts provide their own handler.
+
+* Picker and external drag handoff
+
+~displayPanes~ is a ~SplitTabsCommand~ (default ~Alt+Shift+KeyQ~).
+~SplitTabs.displayPanesTimeout?: number~ defaults to 2000 ms; it must be
+finite and non-negative. ~useSplitTabsPick()?.displayPanes(): boolean~ enters
+the shared picker's ~'display'~ mode. Numbers 1–9 focus the corresponding
+pane and keyboard; 0 is not a tenth-pane shortcut. ~numberOf~ reads across
+rows, then down. See [[file:interaction.html][Interaction]] for capture, passthrough and timeout rules.
+
+~useSplitTabsPick()~ returns the root's picker, or ~undefined~ outside a
+root. ~preview(tabId)~ shows numbers without installing active-mode
+listeners. ~start(tabId)~ moves a view to a numbered destination;
+~select()~ toggles selection by letters; ~keyboardMove()~ moves the target
+by letter and scope. ~cancel()~ clears the mode. Only one picker is active
+per root. See [[file:interaction.html][Interaction]] for its keys.
+
+The root component ref exposes this handoff:
+
+#+begin_src typescript
+startExternalDrag(
+  event: PointerEvent,
+  id: string,
+  ghost: ExternalTabGhost,
+  beforeDrop?: (target: TabDropTarget) => void,
+): void
+#+end_src
+
+~ExternalTabGhost~ is ~{ label: string }~ or an ~HTMLElement~. The host
+arms its source pointer and hands it over after its own threshold.
+~TabDropTarget~ carries the checked bar/inside/split/bin target, result,
+preview shade, and marker state. Only a valid drop calls ~beforeDrop~;
+cancellation, another root, and refused drops do not register external ids.
+
+* Types and separate entries
+
+~createChordTracker(target?: Window, trusted?: (event: KeyboardEvent) => boolean): SplitTabsChordTracker~
+defaults to the current window and ~event.isTrusted~, sharing physical Meta
+observers with library roots. ANY live tracker's predicate may vouch for an
+event, regardless of creation order; disposing its lease removes its predicate.
+~matches(event, chord): boolean~ uses strict physical chords, exact effective
+modifiers and no AltGraph. ~modifiers(event)~ returns effective flags without
+mutating the event; ~dispose(): void~ releases the lease (idempotently).
+Create it before user key presses and dispose it at host unmount. Win/Super
+tracking clears on keyup and hidden visibility, and on a window blur once
+focus has stayed away for 500 ms (Unity/compiz refocus about 30 ms after a
+Win press), including WebKitGTK events whose native Meta flag remains false.
+The delayed clear drops only keys held at blur time; vouched-for native
+replays pressed afterwards survive until their release, hidden visibility,
+or a later blur whose delay expires. See [[file:interaction.html][Native-shell capture and replay]].
+
+The main entry exports model types (~LayoutNode~, ~CutNode~, ~TabSetNode~,
+~TabEntry~, ~SplitTabsIntent~, ~Orientation~, ~Side~), effective layout
+types, controller/result/zone types, component prop and label types, menu
+types, drag types, and picker/keymap types. ~notation~ is the tree readout
+function. ~defaultExitKeys~, ~defaultKeymap~ and ~defaultPointerChords~ are exported host
+policy starting points.
+
+~@0k/vue-split-tabs/frame~ exports ~connectSplitTabsFrame~ and the frame
+protocol types/constants. It imports no Vue code. See [[file:iframes.html][Iframes & Keep]]
+for its exact signature, protocol, and lifecycle.

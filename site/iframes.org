@@ -1,0 +1,169 @@
+#+TITLE: Keep the document alive.
+
+An iframe is a separate document with its own event stream and lifetime.
+The layout must both avoid reloading it and learn which layout interactions
+occur inside it. Overlay Keep and the frame helper solve those separate jobs.
+
+* Ordinary Keep versus overlay Keep
+
+~#keep~ is instantiated once. Each keyed ~SplitTabsKeep~ owns persistent
+host content, matched to a ~SplitTabsAnchor~ by ~part~ and its containing
+tab set. Ordinary Keep content teleports to the currently visible anchor.
+That preserves its Vue component instance, but moving an iframe element in
+the DOM can reload its document.
+
+With ~overlay~, Keep teleports once into the root's keep layer. It is then
+positioned over the anchor instead of being moved between pane elements.
+Moves, collapse, zoom, and restore do not remount it. Matching overlay anchors
+participate in flex layout, and the overlay is repositioned when their boxes
+change—including a tab bar appearing without a tree change.
+
+#+begin_src vue
+<template #pane>
+  <SplitTabsAnchor part="body" />
+</template>
+<template #keep>
+  <SplitTabsKeep v-for="id in tabs" :key="id" :tab="id" part="body" overlay>
+    <iframe :title="id" :src="frameUrl(id)" />
+  </SplitTabsKeep>
+</template>
+#+end_src
+
+The host implements ~frameUrl~, iframe document sizing, titles, and content.
+The library renders the bar OUTSIDE this content. Its pane anchor starts at
+the bar's inner edge on top, left, right or bottom; an iframe never covers
+the bar, and the focus border never surrounds it.
+Do not change the Keep key just to reflect a new pane id: that would request
+a remount. Overlay focus/selection marks are drawn above the content so an
+iframe cannot cover them. See [[file:theming.html][Theming]] for border and dimming recipes.
+
+* Install the helper inside the iframe
+
+The helper is a separate entry with no Vue import. It forwards every
+~keydown~/~keyup~ event's ~key~, ~code~ and modifiers to the configured parent
+origin, including characters typed in iframe fields. Hosts must list only
+trusted origins in helper ~origin~ and shell ~frameOrigins~. Call the helper
+once when the iframe app starts and disconnect when that app unmounts.
+
+#+begin_src typescript
+import { connectSplitTabsFrame } from '@0k/vue-split-tabs/frame';
+
+const disconnect = connectSplitTabsFrame({ origin: location.origin });
+// In your iframe application's teardown:
+// disconnect();
+#+end_src
+
+~connectSplitTabsFrame(options?: ConnectFrameOptions): () => void~ accepts
+~origin?: string~ (the shell origin, default this document's origin) and
+~parent?: Window~ (default ~window.parent~). Calling it outside an iframe
+without a parent override returns a no-op disconnect function.
+
+For cross-origin content, pass the shell's origin to the helper and allow the
+iframe's origin in the root's ~frameOrigins~. The shell defaults to its own
+origin. A matching token does not waive origin checks or root membership.
+
+* Message protocol
+
+The protocol marker is ~{ "split-tabs": 1 }~. Helper reports carry the
+shell-issued ~token~ (initially empty). Use the helper rather than duplicating
+the protocol unless you are implementing a cooperating document deliberately.
+
+| Direction / type | Payload and purpose |
+|------------------+---------------------|
+| Frame → shell: ~hello~ | Starts identification before the helper knows its token. |
+| Shell → frame: ~identify~ | ~token: string~, ~chords: string[]~, ~exitKeys: string[]~, ~captureKeys: string[]~, ~heldKeys: string[]~; updated on hello, load, policy, mode and consumed-press changes. |
+| Frame → shell: ~down~ | ~button~, ~pointerType~, optional ~isPrimary~, ~pointerId~, ~x~, ~y~, and modifier booleans. Focus or chord tap action; touch pointers provisionally count fingers. |
+| Frame → shell: ~key~ | Every ~keydown~ / ~keyup~: ~phase~, ~key~, ~code~, ~repeat~, modifiers, optional ~at~ timestamp, including characters typed in fields. |
+| Frame → shell: ~mods~ | Modifier booleans and optional ~at~. Pointer movement reports held keys even when keyboard focus is elsewhere. |
+| Frame → shell: ~touches~ | ~points: { x, y, x0, y0, identifier?, otherDocument? }[]~ in iframe coordinates. Current and initial finger positions, touch identifiers and foreign-document flags. |
+| Frame → shell: ~touch-pointer~ | ~pointerId~, ~phase: "up" or "cancel"~, optional ~x~, ~y~, ~at~. Releases provisional hints; only up retires matching snapshot fingers. |
+| Shell → frame: ~own-touch~ | ~count: number~. Root-owned finger count, including provisional hints; primes blocking at two, owns input at three, clears stranded touches at zero. |
+| Shell → frame: ~claimed~ | ~what: string~ describing the claimed gesture. The helper dispatches ~split-tabs-claimed~ on its window. |
+
+Modifier booleans are ~ctrlKey~, ~shiftKey~, ~altKey~, ~metaKey~ and optional
+~altGraph~. Coordinates are client pixels relative to the iframe viewport;
+~at~ is ~performance.timeOrigin + event.timeStamp~, comparable across documents.
+The shell checks every frame point's initial position against its root box in
+page coordinates, including points not marked ~otherDocument~ by isolated
+iframe processes. Pointer up retires matching fingers even when Chromium
+never sends their touchend to the sequence-owning document; pointer cancel
+does not discard touch-reported fingers. The 2.5-second silence is a fallback,
+not the normal release path.
+
+Listen for ~split-tabs-claimed~ with ~event.detail.what~; current shell
+claims are ~hold~, ~pinch-out~, and ~pinch-in~. With three or more fingers,
+the helper cancels ~touchstart~ and ~touchmove~ so the browser cannot take
+over the gesture and the iframe content does not scroll, while the shell
+covers its panes until every finger lifts. One and two fingers stay with the
+content; what they did before the third finger cannot be undone. The
+cancelling listener is non-passive only while at least two fingers remain.
+After 2.5 seconds of touch silence, the helper removes that listener and reports
+no fingers; disconnect removes it too. The shell also clears counted fingers
+after 2.5 seconds of finger-report silence rather than keeping a lost release.
+
+* Why a token, not MessageEvent.source?
+
+In WebKit, iframe reports can expose the /receiving/ window as
+~MessageEvent.source~, so the shell cannot rely on that value alone to
+distinguish its iframes. The shell keeps a random token per iframe, sends it
+in ~identify~, and looks up subsequent token-bearing reports against frames
+still inside its root. Unknown nonempty tokens are rejected. Initial
+identification is bootstrapped by ~hello~; a tokenless report can fall back
+to the source lookup where that engine provides it correctly.
+
+The helper accepts shell messages by origin for the same cross-engine
+reason. The token identifies a cooperating frame; it is not a credential for
+untrusted same-origin content. Choose allowed origins as carefully as the
+documents you embed.
+
+* Keyboard focus follows the visible focus
+
+Iframe key events do not bubble into the host page. The helper forwards
+them, and the shell applies the same keymap as it uses for its own document.
+When a layout key changes the focused pane, the root gives keyboard focus to
+its iframe, otherwise its first focusable Keep content, otherwise the pane
+element. Typing then goes where the visible focus mark is.
+
+The helper receives the currently bound chords in ~identify~, updated for
+every pane iframe whenever the effective keymap changes. It forwards every
+key but cancels only bound keydowns with exactly matching modifiers.
+AltGraph is always typing, never a chord or pane cover. Unbound characters
+remain native input. Bound chords always win in iframe text fields, even if
+the command later fails or ignores a repeat: asynchronous ~postMessage~
+cannot return the shell's verdict before the iframe must decide.
+
+~exitKeys~ is separate from command chords: it contains the configured modal
+exit chords only while a library mode is active, and is empty otherwise.
+The helper captures matching keydowns before frame content, cancels default,
+stops propagation and immediate propagation, and forwards the key to exit the
+shell's innermost mode. Its repeats and keyup are consumed too, even after
+the shell sends an empty list on exit. Mode/policy changes update every pane
+iframe; unmount clears its policy. Outside a mode, exit keys alone cancel
+nothing; explicitly bound command chords retain their usual behavior.
+AltGraph and extra modifiers never match exits. Picker letters, digits and
+Enter still reach the active shell picker.
+
+During ~displayPanes~, ~captureKeys~ contains plain digit chords 1–9. They
+are cancelled and stopped in capture before iframe content, forwarded to
+focus a numbered pane, and removed when display ends. ~heldKeys~ carries
+consumed physical codes until release: even a destination iframe that never
+saw the keydown must consume its keyup. Other keys remain normal input and
+end display when the shell receives them.
+
+The helper tracks physical MetaLeft/MetaRight/OSLeft/OSRight (or
+Meta/Super/OS/Hyper keys) inside its document. Key, pointer and modifier
+reports carry ~metaKey = native metaKey || Meta held~, so WebKitGTK's false
+native flag does not break Win/Super chords. Release and hidden visibility
+clear physical state at once; a blur clears held Win only when focus has not
+returned within 500 ms. Reset reports release the other modifiers at once, so
+they also clear shell covers.
+
+Modifier reports matter even before a click: a key held in another document
+may never have reached the shell. Pointer moves report its modifiers so the
+shell can cover panes for layout chords. A chord press that reaches iframe
+content still performs the chord's tap action; starting a drag inside the
+iframe is not possible through that report alone.
+
+The [[file:workbench/][Workbench]] embeds four cooperating documents with ordered input
+logs and a keyboard-focus indicator. They make it possible to observe both
+the iframe's content input and the shell's resulting layout action.

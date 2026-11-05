@@ -376,6 +376,8 @@ and key bindings.
   URLs: never a version, a tag or `%%version%%` (nothing substitutes the
   README), and never relative paths (npm rewrites them unreliably).
 - `npm run check` clears `dist/`; do not run it concurrently with another build.
+- Site sources live in `site/`, built by `npm run site:build`; the Pages workflow publishes on release tags (or manual dispatch).
+  Never package the site; documentation facts must come from the sources.
 
 ## Demo
 

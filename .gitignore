@@ -7,4 +7,5 @@ CLAUDE.local.md
 /demo/dist/
 /demo/.vite/
 /demo/.capture/
+/site/dist/
 /.package.d/announcements.yaml
