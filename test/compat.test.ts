@@ -41,10 +41,15 @@ describe("compatibility and packaging", () => {
     }
   });
 
-  it("public docs state bundler types and keyed controller replacement", () => {
+  it("public docs support NodeNext and Bundler types and keyed controller replacement", () => {
     const docs = readFileSync("README.org", "utf8");
-    expect(docs).toContain('moduleResolution: "bundler"');
-    expect(docs).toContain("NodeNext");
+    for (const path of ["README.org", "site/index.org"]) {
+      const source = readFileSync(path, "utf8");
+      expect(source).toContain('moduleResolution: "bundler"');
+      expect(source).toContain('moduleResolution: "NodeNext"');
+      expect(source).toMatch(/both supported and tested/);
+      expect(source).not.toMatch(/NodeNext is not supported|SFC exports produce TS2307/);
+    }
     expect(docs).toMatch(/controller~ prop is read once/);
     expect(docs).toContain(':key="controllerKey"');
   });

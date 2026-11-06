@@ -354,8 +354,9 @@ and key bindings.
   imports nothing. CSS is explicitly copied/exported and never imported by the
   JavaScript entry. Clear dist before build so stale output cannot ship.
 - Relative TypeScript-module imports use .js extensions. Published component
-  types target moduleResolution:bundler; verify the strict NodeNext consumer
-  probe but do not claim support while Vue SFC exports remain unresolved.
+  types must support both NodeNext and Bundler module resolution; both strict
+  consumer probes are required to pass. Qualify emitted SFC declaration
+  references with .vue.js so both resolvers find their .vue.d.ts files.
 - Stored intent: one LRU table under `storageKey`, refreshed and validated
   before every write; replace only this controller's entry, stamp above every
   stored stamp, drop only invalid entries, keep the highest-stamp duplicate.
