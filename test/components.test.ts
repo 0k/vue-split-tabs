@@ -2,7 +2,7 @@
 // keymap, pane covers, pick modes and content that never remounts.  Real
 // browser input (touch compositor, iframes) is covered by test/browser.mjs.
 import { mount } from "@vue/test-utils";
-import { defineComponent, h, nextTick } from "vue";
+import { defineComponent, h, nextTick, ref } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import {
@@ -1392,5 +1392,27 @@ describe("undo offer", () => {
     expect(c.canUndo.value).toBe(true);
     vi.advanceTimersByTime(2001);
     expect(c.canUndo.value).toBe(false);
+  });
+});
+
+describe("divider thickness", () => {
+  it("a reactive dividerSize updates the root variable and the cut's first basis without remounting", async () => {
+    const size = ref(6);
+    const c = controller({ dividerSize: size });
+    c.setContainerSize(600, 400);
+    c.move({ view: "b" }, { kind: "split", target: c.paneOf("a")!, side: "right" });
+    const wrapper = mount(SplitTabs, { attachTo: document.body, props: { controller: c, labels: { divider: "Resize" } } });
+    await settle();
+    const root = wrapper.element as HTMLElement;
+    const first = () => (wrapper.get(".split-tabs-cut").element.firstElementChild as HTMLElement).style.flexBasis;
+    expect(root.style.getPropertyValue("--split-tabs-divider-size")).toBe("6px");
+    expect(first()).toBe("calc(0.5 * (100% - 6px))");
+    const divider = wrapper.get(".split-tabs-divider").element;
+    size.value = 10;
+    await nextTick();
+    expect(root.style.getPropertyValue("--split-tabs-divider-size")).toBe("10px");
+    expect(first()).toBe("calc(0.5 * (100% - 10px))");
+    expect(wrapper.get(".split-tabs-divider").element).toBe(divider);
+    wrapper.unmount();
   });
 });

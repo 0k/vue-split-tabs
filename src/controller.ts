@@ -51,8 +51,11 @@ export interface SplitTabsOptions {
   active?: { get(): string; set(id: string): void };
   entryKey: MaybeRefOrGetter<string>; storageKey: string; storage?: SplitTabsStorage; maxEntries?: number;
   minPaneWidth: number; minPaneHeight: number;
-  /** Divider thickness in pixels, at least 1 (default 6); its grab zone is wider (see `--split-tabs-divider-hit-extra`). */
-  dividerSize?: number;
+  /**
+   * Divider thickness in pixels, at least 1 (default 6); its grab zone is wider (see `--split-tabs-divider-hit-extra`).
+   * A ref or getter re-lays the panes when it changes, without writing storage.
+   */
+  dividerSize?: MaybeRefOrGetter<number>;
   /** Actual thickness of a top / bottom tab bar, included in layout minima. Default 32. */
   barThickness?: number;
   /** Default width of a left / right tab bar. Default 96. */
@@ -194,10 +197,14 @@ function stableComputed<T>(read: () => T, serialize: (value: T) => string | unde
 export function createSplitTabsController(options: SplitTabsOptions): SplitTabsController {
   const storage = options.storage ?? browserStorage();
   const maxEntries = Number.isFinite(options.maxEntries) ? Math.max(1, Math.floor(options.maxEntries ?? 50)) : 50;
-  const dividerSize = options.dividerSize ?? 6;
-  if (!Number.isFinite(dividerSize) || dividerSize < 1) {
-    throw new Error(`split-tabs: dividerSize must be a finite number of at least 1 (pixels), got ${dividerSize}`);
-  }
+  const divider = computed(() => {
+    const size = options.dividerSize === undefined ? 6 : toValue(options.dividerSize);
+    if (!Number.isFinite(size) || size < 1) {
+      throw new Error(`split-tabs: dividerSize must be a finite number of at least 1 (pixels), got ${size}`);
+    }
+    return size;
+  });
+  void divider.value; // Refuse an invalid initial thickness at creation.
   const barThickness = Math.max(0, options.barThickness ?? 32);
   const alwaysShow = shallowRef<SplitTabsBarVisibility>(false);
   const sideBarWidth = Math.max(1, options.sideBarWidth ?? 96);
@@ -338,7 +345,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
       stage: { x: 0, y: 0, w: width.value, h: height.value },
       min: { w: options.minPaneWidth, h: options.minPaneHeight },
       snap, bar: { thickness: barThickness, width: sideBarWidth },
-      alwaysShow: alwaysShow.value, barWidths: liveBars.value, divider: dividerSize,
+      alwaysShow: alwaysShow.value, barWidths: liveBars.value, divider: divider.value,
       recent(id, keys) { return [...(visits.get(id) ?? [])].reverse().find(k => keys.includes(k)); },
     };
   }
@@ -390,7 +397,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     return { ws, env };
   }
   const working = computed(() => build());
-  const sizes = computed<Sizes>(() => ({ width: width.value, height: height.value, divider: dividerSize,
+  const sizes = computed<Sizes>(() => ({ width: width.value, height: height.value, divider: divider.value,
     minWidth: options.minPaneWidth, minHeight: options.minPaneHeight, live: live.value, bars: liveBars.value }));
   let projectionKey = "";
   let projecting = false;
@@ -596,7 +603,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
       if (n.kind === "cut" && n.orientation === axis) { collect(n.first); collect(n.second); } else segments.push(n);
     })(run);
     const length = axis === "cols" ? run.width : run.height;
-    const available = length - (segments.length - 1) * dividerSize;
+    const available = length - (segments.length - 1) * divider.value;
     const sizesOf = segments.map(() => available / segments.length);
     // Water-fill around effective minima, so equalization cannot fold an inner split.
     const minima = segments.map(n => p.minima.get(idOf(n))![axis]);
@@ -618,14 +625,14 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     function distribute(n: EffectiveNode): { node: EffectiveNode; length: number } {
       if (n.kind !== "cut" || n.orientation !== axis) return { node: n, length: sizesOf[cursor++]! };
       const a = distribute(n.first), b = distribute(n.second);
-      return { node: { ...n, first: a.node, second: b.node, ratio: a.length / (a.length + b.length) }, length: a.length + dividerSize + b.length };
+      return { node: { ...n, first: a.node, second: b.node, ratio: a.length / (a.length + b.length) }, length: a.length + divider.value + b.length };
     }
     function constrain(n: EffectiveNode, w: number, h: number): void {
       if (n.kind !== "cut" || n.orientation !== axis) return;
       const bounds = [p.minima.get(idOf(n.first))![axis], p.minima.get(idOf(n.second))![axis]] as const;
       const ratio = clampRatio(axis, n.ratio, w, h, sizes.value, bounds);
       ratios.set(n.id, ratio);
-      const avail = (axis === "cols" ? w : h) - dividerSize;
+      const avail = (axis === "cols" ? w : h) - divider.value;
       const a = avail * ratio, b = avail - a;
       constrain(n.first, axis === "cols" ? a : w, axis === "rows" ? a : h);
       constrain(n.second, axis === "cols" ? b : w, axis === "rows" ? b : h);
@@ -695,7 +702,8 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     }),
     opened: stableComputed(() => readonly(viewsOf(working.value.ws.root).filter(id => isOptional(id) && working.value.env.visible(id)))),
     intent: stableComputed(() => readonly(state.value)),
-    dividerSize, sideBarWidth, barThickness,
+    get dividerSize() { return divider.value; },
+    sideBarWidth, barThickness,
     setAlwaysShow: policy => { alwaysShow.value = policy; },
     notation: computed(() => {
       const { ws, env } = working.value;

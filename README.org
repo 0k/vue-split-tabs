@@ -656,7 +656,7 @@ must move to the tree and zone APIs.
 | ~storage~ | Optional ~SplitTabsStorage~ with ~getItem~, ~setItem~, and ~removeItem~. |
 | ~maxEntries~ | LRU capacity; default 50, minimum 1. |
 | ~minPaneWidth~, ~minPaneHeight~ | Required pane minima in pixels. |
-| ~dividerSize~ | Divider thickness in pixels, at least 1 (smaller, ~NaN~ or infinite values throw at creation); default 6. The grab zone stays at least 8 px. |
+| ~dividerSize~ | Divider thickness in pixels, at least 1; default 6. A plain number or a ~MaybeRefOrGetter<number>~: a ref or getter re-lays the panes when it changes, without writing storage. Smaller, ~NaN~ or infinite values throw at creation, or when ~dividerSize~ is next read after a change. The grab zone stays at least 8 px. |
 | ~barThickness~ | Actual top/bottom bar thickness, including padding; default 32. Included in collapse and divider minima. |
 | ~sideBarWidth~ | Default left/right bar width; default 96. |
 | ~snap~ | Grouping alignment tolerance in pixels; default 40. |
@@ -667,7 +667,8 @@ must move to the tree and zone APIs.
 Reactive ~ComputedRef~ members are ~layout~, ~panes~, ~frames~, ~cuts~,
 ~tabSets~, ~isSplit~, ~hasSplit~, ~orientation~, ~fits~, ~focus~, ~selection~, ~plan~,
 ~barFocus~, ~zoomed~, ~canUndo~, ~undoSerial~, ~restoredActive~, ~opened~,
-~intent~, and ~notation~. ~dividerSize~, ~sideBarWidth~ and ~barThickness~ are readonly numbers.
+~intent~, and ~notation~. ~dividerSize~, ~sideBarWidth~ and ~barThickness~ are readonly numbers;
+~dividerSize~ reads the current value of a reactive option.
 
 ~hasSplit~ is true for two or more visible panes in the unzoomed folded
 working tree, independent of container size and ~alwaysShow~. ~isSplit~ is

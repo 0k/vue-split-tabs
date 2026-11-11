@@ -598,6 +598,28 @@ describe("commands, undo and zoom", () => {
     expect(c.panes.value.map(p => p.width)).toEqual([499.5, 499.5]);
   });
 
+  it("a reactive dividerSize re-lays the panes at once, in both directions, without writing", () => {
+    const size = ref(4);
+    const { c, storage } = make({ dividerSize: size });
+    splitOff(c, "b", "a", "right");
+    const n = writes(storage);
+    expect(c.panes.value.map(p => p.width)).toEqual([498, 498]);
+    size.value = 12;
+    expect(c.dividerSize).toBe(12);
+    expect(c.panes.value.map(p => p.width)).toEqual([494, 494]);
+    size.value = 2;
+    expect(c.panes.value.map(p => p.width)).toEqual([499, 499]);
+    expect(writes(storage)).toBe(n);
+  });
+
+  it("a reactive dividerSize is refused at creation and when it later drops below 1px", () => {
+    expect(() => make({ dividerSize: ref(0) })).toThrow(/dividerSize/);
+    const size = ref(3);
+    const { c } = make({ dividerSize: () => size.value });
+    size.value = 0.5;
+    expect(() => c.dividerSize).toThrow(/dividerSize/);
+  });
+
   it("a side bar's live width shows at once without writing; the commit writes once and drops the live value", () => {
     const { c, storage } = make();
     c.tabNext();
