@@ -47,7 +47,7 @@ async function startMouse(page, locator) {
 async function moveMouse(page, p) { await page.mouse.move(p.x, p.y, { steps: 8 }); }
 async function clean(page) {
   await page.waitForFunction(() => !document.querySelector([
-    ".split-tabs-drag-ghost", ".split-tabs-drop-shade", ".split-tabs-guide", ".split-tab-strip-item--drag-armed",
+    ".split-tabs-drag-ghost", ".split-tabs-drop-shade", ".split-tabs-bar-preview", ".split-tabs-guide", ".split-tab-strip-item--drag-armed",
     ".split-tab-strip-item--spring", ".split-tabs--dragging", ".split-tabs--resizing", "[data-split-tabs-bin]",
   ].join(",")));
   // Iframe keyup is delivered by postMessage after the native press resolves.
@@ -1392,6 +1392,88 @@ acceptanceCases.push(["display-panes numbers focus pane 2 and transfer typing wi
     assert.equal(await frame(page, "b").evaluate(el => el.contentWindow.keys.at(-1)), "x");
   }
 }]);
+
+async function clusterFixture(page, arrange = false) {
+  await grid(page);
+  if (arrange) await page.evaluate(() => window.runLayout("arrange"));
+  await page.evaluate(() => {
+    const c = window.controller;
+    c.setSelection([c.paneOf("a"), c.paneOf("b")]);
+    window.writes.length = 0;
+  });
+}
+async function startPaneMouse(page, view) {
+  await page.keyboard.down("Alt");
+  await page.keyboard.down("Shift");
+  await startMouse(page, (await pane(page, view)).locator(".split-tabs-pane-cover"));
+  await page.keyboard.up("Shift");
+  await page.keyboard.up("Alt");
+}
+const layoutSnapshot = page => page.evaluate(() => JSON.stringify({ notation: window.controller.notation.value,
+  intent: window.controller.intent.value, selection: window.controller.selection.value, focus: window.controller.focus.value,
+  storage: Object.entries(localStorage), writes: window.writes }));
+
+acceptanceCases.push(["cluster bar pops on full rectangle entry; pane drop groups in one write", async page => {
+  await clusterFixture(page);
+  const before = await layoutSnapshot(page);
+  await startPaneMouse(page, "c");
+  await moveMouse(page, await point(await pane(page, "b")));
+  const preview = page.locator(".split-tabs-bar-preview");
+  await preview.waitFor();
+  assert.equal(await preview.locator('.split-tab-strip-item[data-kind="layout"]').textContent(), "a+b");
+  assert.equal(await layoutSnapshot(page), before, "hover must not group, focus, select or save");
+  const p = await point(preview.locator(".split-tab-strip-item"), 0.8);
+  await moveMouse(page, p);
+  await page.waitForSelector('.split-tabs-drop-shade[data-zone="bar"][data-marker]');
+  await releaseMouse(page);
+  await expectNotation(page, "V[T{H[a b] | *c} d]");
+  assert.equal(await page.evaluate(() => window.writes.length), 1);
+}]);
+
+for (const end of ["Escape", "no zone"]) acceptanceCases.push([`cluster enter, leave and ${end} cancel without any mutation`, async page => {
+  await clusterFixture(page);
+  const before = await layoutSnapshot(page);
+  await startPaneMouse(page, "c");
+  await moveMouse(page, await point(await pane(page, "b")));
+  await page.waitForSelector(".split-tabs-bar-preview");
+  await moveMouse(page, { x: 1, y: 1 });
+  await page.waitForSelector(".split-tabs-bar-preview", { state: "detached" });
+  if (end === "Escape") await page.keyboard.press("Escape");
+  await releaseMouse(page);
+  assert.equal(await layoutSnapshot(page), before);
+  assert.equal(await page.locator(".split-tabs-bar-preview").count(), 0);
+}]);
+
+acceptanceCases.push(["hidden one-tab strip previews; below it top quarter splits; strip drop adds next tab", async page => {
+  await grid(page);
+  await page.evaluate(() => { window.writes.length = 0; });
+  const target = await box(await pane(page, "b"));
+  await startPaneMouse(page, "c");
+  await moveMouse(page, { x: target.x + target.width / 2, y: target.y + 16 });
+  await page.waitForSelector(".split-tabs-bar-preview.split-tab-strip--drop-target");
+  assert.equal(await page.locator(".split-tabs-bar-preview .split-tab-strip-tab").textContent(), "b");
+  await moveMouse(page, { x: target.x + target.width / 2, y: target.y + 36 });
+  await page.waitForSelector('.split-tabs-drop-shade[data-zone="split"][data-side="top"]');
+  assert.equal(await page.locator(".split-tabs-bar-preview").count(), 0);
+  await moveMouse(page, { x: target.x + target.width / 2, y: target.y + 16 });
+  await releaseMouse(page);
+  await expectNotation(page, "H[a V[(b *c) d]]");
+  assert.equal(await page.evaluate(() => window.writes.length), 1);
+}]);
+
+acceptanceCases.push(["cluster CDP arrange pane drag pops bar before top and drops in one write", async (page, cdp) => {
+  await clusterFixture(page, true);
+  const source = (await pane(page, "c")).locator(".split-tabs-pane-cover");
+  const start = await touchStart(page, cdp, source, false);
+  await touchMove(page, cdp, start, await point(await pane(page, "b")));
+  await page.waitForSelector(".split-tabs-bar-preview");
+  const p = await point(page.locator(".split-tabs-bar-preview .split-tab-strip-item"), 0.8);
+  await touchMove(page, cdp, await point(await pane(page, "b")), p);
+  await page.waitForSelector('.split-tabs-drop-shade[data-zone="bar"]');
+  await touchEnd(page, cdp);
+  await expectNotation(page, "V[T{H[a b] | *c} d]");
+  assert.equal(await page.evaluate(() => window.writes.length), 1);
+}, "", { cdp: true }]);
 
 acceptanceCases.push(["same-origin mixed-document release clears blockers before queued ownership delivery", async (page, cdp) => {
   // Hold posted releases, not native input: cleanup must finish in the shell's release handler.

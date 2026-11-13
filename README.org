@@ -380,10 +380,48 @@ frame band splits beside the framed tab set, and a root band splits the whole
 area. The bin, shown while dragging, closes an internal dragged view, pane, or
 selection.
 
+During a drag, a hidden one-tab pane has a drop strip where its bar would
+appear, on its configured side (~barThickness~ high, or ~barWidth~ wide).
+Entering that strip previews its shown tab and an insertion marker; dropping
+adds a tab NEXT to it. Elsewhere, quarters and middle use the content minus
+that strip. The source's own pane keeps its self-drop behavior, without a strip.
+
+A groupable selection of at least two panes acts as ONE cluster for a source
+outside every member's tabs/views. Its rectangle includes member tab-set
+boxes and frames containing only members. Bin, root bands and non-member
+frame bands keep precedence; the cluster overrides member bars and zones.
+If the grouped selection has no visible direct holder bar, a one-tab layout
+bar pops out over the rectangle's full top edge as soon as the pointer enters
+anywhere in it, and remains throughout the rectangle. Its label represents
+all member views, including non-shown tabs. Drop on that bar to add beside
+the group, in a content quarter to split beside the group, or in its middle
+to add inside. Quarter shades span half the cluster rectangle; middle excludes
+the preview strip. With a visible direct holder, no bar pops out and quarters
+and middle use the entire rectangle; the real holder bar remains a bar target.
+
+The shared ~.split-tabs-bar-preview~ overlay reuses bar/item/title classes,
+~tabClass~ and the root ~#tab~ slot, is pointer-inert and aria-hidden, and has
+no real target data attributes. ~data-root-edges~ names the root edges it
+touches, so a host that draws controls over the root's corners can keep the
+previewed label clear of them as it does for real bars. It sits above Keep/iframe content and below
+drop markers, using ~--split-tabs-overlay-z-index~. No space is reserved and
+no tree, focus, selection or storage change occurs on hover. Leaving the
+cluster/strip or ending the drag removes it; this does not show one-tab bars
+by default. A cancelled drag or release outside all zones does not apply grouping.
+
 ~move(source, zone)~ accepts a view, a node, or the current selection. A
 selection is grouped first. ~canMove~ is the non-mutating dry run, including
 prospective external view ids before host registration. Moves and
 drop results are atomic; an invalid target changes nothing.
+
+Any zone's ~target~ may be ~"selection"~, meaning the current selection,
+grouped first (like ~"root"~ names the whole area for a split). For a
+selection bar drop, ~index: 0~ means immediately BEFORE the group, ~null~
+means immediately AFTER it, in its existing holder or a new bar in its place.
+A whole pane brings its tabs, never its bar; the dropped content becomes shown.
+Inside/split zones use the grouped node. An empty selection is ~unknown~,
+an ungroupable one returns ~not-groupable~, and a selection source targeting
+~"selection"~ returns ~into-itself~. ~insert~ uses the same target semantics.
 
 Dropping a pane or its SHOWN tab's label on its OWN outer quarter splits
 INSIDE the shown tab in equal halves. Its content goes on the dropped side,
@@ -669,6 +707,10 @@ Reactive ~ComputedRef~ members are ~layout~, ~panes~, ~frames~, ~cuts~,
 ~barFocus~, ~zoomed~, ~canUndo~, ~undoSerial~, ~restoredActive~, ~opened~,
 ~intent~, and ~notation~. ~dividerSize~, ~sideBarWidth~ and ~barThickness~ are readonly numbers;
 ~dividerSize~ reads the current value of a reactive option.
+
+~SplitTabsPlan.holder: string | null~ is the visible tab set of which the
+prospective group would be a DIRECT tab (2+ visible tabs or ~alwaysShow~),
+or null. It is computed on a copy, without changing saved intent or writing.
 
 ~hasSplit~ is true for two or more visible panes in the unzoomed folded
 working tree, independent of container size and ~alwaysShow~. ~isSplit~ is
@@ -1044,6 +1086,11 @@ the source threshold and hands an armed pointer to the same drag instance.
 ~TabDropTarget~ is a checked ~bar~, ~inside~, ~split~, or ~bin~ zone with
 ~result~, preview ~shade~, and marker state. Self-drops also carry an optional
 ~newPane: PreviewRect~ for the opposite half. An absent id may preview targets.
+~reveal?: { rect: PreviewRect; side: Side; tab: SplitTabsTabScope }~ describes
+the one-tab preview overlay, in root coordinates. It accompanies every zone
+inside a popped cluster, and a hidden pane's bar-strip zone. The group tab has
+~id: ''~, ~kind: 'layout'~, every member's views in plan order and ~title: null~;
+a pane preview uses its shown tab's actual key, description and custom title.
 On a valid drop requiring insertion, ~beforeDrop~ runs synchronously after
 the target is resolved and placement validated, before insertion. Use it to
 register the id in host tabs inside ~insert~'s registration callback. For an
@@ -1141,6 +1188,7 @@ DOM hooks (ids retain their existing controller meaning):
 |------+---------|
 | ~.split-tabs-tabset[data-tabset-id][data-side]~ | Outer bar + content box, on any of four sides. ~data-split-tabs-node~ is here for whole-node scopes. |
 | ~.split-tabs-bar[data-bar-id]~ | Library-owned bar; also keeps ~.split-tab-strip~, ~data-tab-set~, ~data-side~ and existing label/resize hooks. |
+| ~.split-tabs-bar-preview[data-side][data-root-edges]~ | One-tab drag overlay; shares strip/bar and active item/title/tab classes, never real target data attributes. ~data-root-edges~ lists the root edges it touches (~top left~, ...), absent when none. |
 | ~.split-tabs-pane[data-pane-id]~ | Pane CONTENT ONLY; carries focus/selection state, ~data-split-tabs-pane~, ~data-side~, ~data-collapsed~. |
 | ~.split-tabs-pane-content~ | Host content inside a pane; opacity dims this wrapper and matching overlay keep content, never covers or picker badges. |
 | ~.split-tabs-frame[data-frame-id]~ | A tab-set box showing a layout/inner bar; whole-frame edge drops use this box. |
@@ -1211,6 +1259,7 @@ Start and end controls share ~--split-tabs-strip-end-background~ and
 | ~--split-tabs-strip-gap~ | ~0px~ |
 | ~--split-tabs-strip-padding~ | ~0px~ |
 | ~--split-tabs-strip-background~ | ~transparent~ |
+| ~--split-tabs-bar-preview-background~ | ~Canvas~; opaque, since the drag preview bar covers pane content |
 | ~--split-tabs-strip-end-background~ | ~inherit~ |
 | ~--split-tabs-strip-end-padding~ | ~0~ |
 | ~--split-tabs-drag-opacity~ | ~0.5~ |

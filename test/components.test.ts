@@ -9,6 +9,153 @@ import {
   SplitTabs, SplitTabsAnchor, SplitTabsKeep, SplitTabStrip, defaultKeymap, defaultPointerChords, type SplitTabsKeymap, type SplitTabsPointerChords,
 } from "../src/index";
 import { controller, key, pointer, storage } from "./helpers";
+import type { SplitTabsTabScope } from "../src/context.js";
+
+// Acceptance ledger: algebra tests cover grouping/atomic refusals and placement;
+// controller tests cover holder policy, external insertion and one-write drops;
+// the cases below cover A1/A3-A5, B1-B5, C1-C4 (including post-render label geometry).
+// browser-lib repeats cluster drop/cancel and hidden-strip placement with native input;
+// random controller moves cover selection targets and saved-tree invariants.
+describe("drag bar previews", () => {
+  async function previewFixture(cluster = true, tab?: (scope: SplitTabsTabScope) => ReturnType<typeof h>) {
+    const f = await fixture({ tabs: ["a", "b", "c"], ...(tab ? { tab } : {}) });
+    const { c, wrapper, s } = f;
+    c.move({ view: "c" }, { kind: "split", target: c.paneOf("a")!, side: "bottom" });
+    c.move({ view: "b" }, { kind: "split", target: c.paneOf("a")!, side: "right" });
+    if (cluster) c.setSelection([c.paneOf("a")!, c.paneOf("b")!]);
+    await wrapper.setProps({ tabClass: "host-tab" });
+    await settle();
+    for (const p of c.panes.value) {
+      const r = p.view === "c" ? new DOMRect(0, 203, 600, 197)
+        : new DOMRect(p.view === "a" ? 0 : 303, 0, 297, 197);
+      for (const selector of [`[data-pane-id="${p.id}"]`, `.split-tabs-tabset[data-tabset-id="${p.id}"]`]) {
+        vi.spyOn(wrapper.get(selector).element, "getBoundingClientRect").mockReturnValue(r);
+      }
+    }
+    Object.defineProperty(document, "elementsFromPoint", { configurable: true, value: () => [] });
+    s.setItem.mockClear();
+    const start = (id = "c", x = 160, y = 100) => {
+      const api = wrapper.vm.$.exposed!.startExternalDrag as (e: PointerEvent, id: string, ghost: { label: string }) => void;
+      api(new PointerEvent("pointerdown", { pointerId: 3, pointerType: "mouse", clientX: x, clientY: y }), id, { label: id });
+    };
+    return { ...f, start };
+  }
+  it("pops the cluster bar on entry, keeps it through quarters, and mirrors host classes without target attributes", async () => {
+    const { c, s, wrapper, start } = await previewFixture();
+    const before = JSON.stringify([c.intent.value, c.selection.value, c.focus.value]);
+    start(); await nextTick();
+    const preview = wrapper.get(".split-tabs-bar-preview");
+    expect(preview.classes()).toEqual(expect.arrayContaining(["split-tab-strip", "split-tabs-bar"]));
+    expect(preview.attributes("aria-hidden")).toBe("true");
+    expect(preview.attributes("data-side")).toBe("top");
+    expect(preview.get(".split-tab-strip-item--active").attributes("data-kind")).toBe("layout");
+    expect(preview.get(".split-tab-strip-title--active > .split-tab-strip-tab--active.host-tab").text()).toBe("a+b");
+    for (const name of ["bar-id", "tab-set", "tabset-id", "pane-id", "frame-id", "split-tabs-node"]) {
+      expect(preview.find(`[data-${name}]`).exists()).toBe(false);
+      expect(preview.attributes(`data-${name}`)).toBeUndefined();
+    }
+    expect(preview.find("button,a,input,[tabindex]").exists()).toBe(false);
+    expect(wrapper.get(".split-tabs-drop-shade").attributes("data-zone")).toBe("inside");
+    pointer(window, "pointermove", { clientX: 160, clientY: 45 }); await nextTick();
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(true);
+    expect(wrapper.get(".split-tabs-drop-shade").attributes("data-zone")).toBe("split");
+    expect(JSON.stringify([c.intent.value, c.selection.value, c.focus.value])).toBe(before);
+    expect(s.setItem).not.toHaveBeenCalled();
+    key({ key: "Escape", code: "Escape" }); await nextTick();
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(false);
+    expect(JSON.stringify([c.intent.value, c.selection.value, c.focus.value])).toBe(before);
+    wrapper.unmount(); c.dispose();
+  });
+  it.each(["pointercancel", "outside"])("cluster hover then %s preserves intent, selection, focus and storage", async end => {
+    const { c, s, wrapper, start } = await previewFixture();
+    const before = JSON.stringify([c.intent.value, c.selection.value, c.focus.value]);
+    start(); await nextTick();
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(true);
+    pointer(window, "pointermove", { clientX: 700, clientY: 100 }); await nextTick();
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(false);
+    pointer(window, end === "outside" ? "pointerup" : end, { clientX: 700, clientY: 100 });
+    expect(JSON.stringify([c.intent.value, c.selection.value, c.focus.value])).toBe(before);
+    expect(s.setItem).not.toHaveBeenCalled();
+    wrapper.unmount(); c.dispose();
+  });
+  it("hidden pane strip previews a tab; just below it the top quarter splits on the reduced content", async () => {
+    const { c, s, wrapper, start } = await previewFixture(false);
+    start("c", 160, 16); await nextTick();
+    expect(wrapper.get(".split-tabs-drop-shade").attributes("data-zone")).toBe("bar");
+    expect(wrapper.get(".split-tabs-bar-preview").classes()).toContain("split-tab-strip--drop-target");
+    expect(wrapper.get(".split-tabs-bar-preview .host-tab").text()).toBe("a");
+    pointer(window, "pointermove", { clientX: 160, clientY: 40 }); await nextTick();
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(false);
+    const shade = wrapper.get<HTMLElement>(".split-tabs-drop-shade");
+    expect(shade.attributes("data-side")).toBe("top");
+    expect(shade.element.style.top).toBe("32px");
+    pointer(window, "pointerup", { clientX: 160, clientY: 16 }); await nextTick();
+    expect(c.tabSet(c.paneOf("c")!)!.tabs).toEqual(["a", "c"]);
+    expect(s.setItem).toHaveBeenCalledTimes(1);
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(false);
+    wrapper.unmount(); c.dispose();
+  });
+  it("relocates the stationary pointer after rendering the preview label", async () => {
+    const { c, wrapper, start } = await previewFixture();
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function(this: HTMLElement) {
+      if (this.matches(".split-tabs-bar-preview .split-tab-strip-item")) return new DOMRect(0, 0, 200, 32);
+      return original.call(this);
+    });
+    start("c", 80, 16);
+    await nextTick(); await nextTick();
+    const shade = wrapper.get<HTMLElement>(".split-tabs-drop-shade");
+    expect(shade.attributes("data-marker")).toBe("");
+    expect(shade.element.style.left).toBe("-2px");
+    pointer(window, "pointerup", { clientX: 80, clientY: 16 });
+    expect(c.notation.value).toBe("T{*c | H[a b]}");
+    rect.mockRestore(); wrapper.unmount(); c.dispose();
+  });
+  it.each(["top", "left", "bottom", "right"] as const)("hidden %s strip uses its configured dimensions and title", async side => {
+    const { c, s, wrapper, start } = await previewFixture(false);
+    await wrapper.setProps({ alwaysShow: true });
+    c.focusPane(c.paneOf("a")!);
+    for (let n = 0; n < 4 && c.tabSet(c.paneOf("a")!)!.side !== side; n++) c.cycleBarSide();
+    c.rename("a", "Custom");
+    await wrapper.setProps({ alwaysShow: false });
+    s.setItem.mockClear();
+    const x = side === "left" ? 20 : side === "right" ? 277 : 160;
+    const y = side === "top" ? 16 : side === "bottom" ? 181 : 100;
+    start("c", x, y); await nextTick();
+    const preview = wrapper.get<HTMLElement>(".split-tabs-bar-preview");
+    expect(preview.attributes("data-side")).toBe(side);
+    expect(preview.classes().includes("split-tab-strip--vertical")).toBe(side === "left" || side === "right");
+    expect(preview.element.style.width).toBe(side === "left" || side === "right" ? "96px" : "297px");
+    expect(preview.element.style.height).toBe(side === "left" || side === "right" ? "197px" : "32px");
+    expect(preview.get(".host-tab").text()).toBe("Custom");
+    pointer(window, "pointercancel"); await nextTick();
+    expect(s.setItem).not.toHaveBeenCalled();
+    wrapper.unmount(); c.dispose();
+  });
+  it("a member source does not activate the cluster, but another member's hidden strip remains a target", async () => {
+    const { c, wrapper, start } = await previewFixture();
+    start("a", 460, 100); await nextTick();
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(false);
+    pointer(window, "pointermove", { clientX: 460, clientY: 16 }); await nextTick();
+    expect(wrapper.get(".split-tabs-bar-preview .host-tab").text()).toBe("b");
+    pointer(window, "pointermove", { clientX: 160, clientY: 16 }); await nextTick();
+    expect(wrapper.find(".split-tabs-bar-preview").exists()).toBe(false);
+    pointer(window, "pointercancel"); wrapper.unmount(); c.dispose();
+  });
+  it("preview uses the host tab slot scope and removes its controls from the tab order on WebView 91", async () => {
+    const scopes: SplitTabsTabScope[] = [];
+    const { c, wrapper, start } = await previewFixture(true, scope => {
+      scopes.push(scope);
+      return h("a", { href: "#host", class: "host-label" }, scope.title ?? scope.views.join(" + "));
+    });
+    start(); await nextTick(); await nextTick();
+    const preview = wrapper.get(".split-tabs-bar-preview");
+    expect(scopes).toContainEqual({ id: "", active: true, kind: "layout", views: ["a", "b"], title: null });
+    expect(preview.get(".host-label").text()).toBe("a + b");
+    expect(preview.get(".host-label").attributes("tabindex")).toBe("-1");
+    pointer(window, "pointercancel"); wrapper.unmount(); c.dispose();
+  });
+});
 
 afterEach(() => vi.useRealTimers());
 
@@ -18,7 +165,8 @@ async function settle(): Promise<void> {
   if (vi.isFakeTimers()) vi.advanceTimersByTime(2); else await new Promise(resolve => setTimeout(resolve, 2));
 }
 async function fixture(options: { tabs?: string[]; keymap?: SplitTabsKeymap | null; overlay?: boolean;
-  pointerChords?: SplitTabsPointerChords; iframes?: boolean; optional?: string[]; closeButton?: "never" | "active" | "hover" | "always" } = {}) {
+  pointerChords?: SplitTabsPointerChords; iframes?: boolean; optional?: string[]; closeButton?: "never" | "active" | "hover" | "always";
+  tab?: (scope: SplitTabsTabScope) => ReturnType<typeof h> } = {}) {
   const s = storage();
   const c = controller({ storage: s, ...(options.tabs ? { tabs: options.tabs } : {}), ...(options.optional ? { optional: options.optional } : {}) });
   c.setContainerSize(600, 400);
@@ -33,6 +181,7 @@ async function fixture(options: { tabs?: string[]; keymap?: SplitTabsKeymap | nu
       onCommand: (name: string, result: unknown) => { commands.push([name, result]); },
     },
     slots: {
+      ...(options.tab ? { tab: options.tab } : {}),
       keep: () => (options.tabs ?? ["a", "b", "c", "d"]).map(tab =>
         h(SplitTabsKeep, { key: tab, tab, part: "body", overlay: options.overlay ?? false },
           () => options.iframes ? h("iframe", { "data-tab": tab }) : h("div", { class: "content", "data-tab": tab }, tab))),

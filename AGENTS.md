@@ -66,17 +66,49 @@ and key bindings.
   The library owns every tab set's bar, beside its pane/frame content on any
   side. Host pane/frame slots supply CONTENT ONLY, never strips. Pane marks,
   opacity, covers, pick badges and middle/quarter drops MUST exclude bars.
+  The one exception is a drag over a groupable selection (below): it acts as
+  ONE window whose member bars are inside it; only its own popped-out bar
+  strip is excluded from its middle and quarters.
 - A tab bar with one tab is HIDDEN by default (`SplitTabs.alwaysShow` opts out,
   boolean or per-tab-set function). Never show single-tab bars by default,
   split or not. Host bar controls use root `bar-start`/`bar-end` slots; request
   a visible bar for controls needed on a one-tab set. Do not invent a second
-  hidden-bar control location.
+  hidden-bar control location. During a drag ONLY, a one-tab bar is PREVIEWED
+  as an overlay in a pane's hidden-bar strip, or popped out over a groupable
+  selection as soon as the pointer enters it. It resizes nothing, disappears
+  when the pointer leaves or the drag ends, and never makes a single-tab bar
+  shown by default.
 - Drop zones: a drop on a tab bar adds a tab NEXT to the others at the marker;
   a drop in a pane's MIDDLE adds a tab INSIDE that zone (an inner bar); a
   pane's outer QUARTER places the dragged content on that side of a cut;
   a self-drop follows the self-split decision below. A thin band along a frame splits
   beside the whole tab set; a thin band along the root splits the whole area;
-  the bin (shown while dragging) closes what is dragged.
+  the bin (shown while dragging) closes what is dragged. A hidden one-tab
+  pane's would-be bar strip is a bar drop place during a drag; its remaining
+  content supplies quarters/middle. A groupable multi-pane selection owns its
+  whole bounding rectangle for outside sources, before member bars, strips,
+  panes and member-frame bands. Non-member frame bands and root/bin retain
+  precedence. The cluster's bar pops out on entry unless its prospective group
+  is already a direct tab of a visible holder. Bar drops insert beside the
+  group, quarters split the group, middle adds inside. Group ONLY on drop,
+  on the working copy, with one successful write; never mutate while hovering.
+- A groupable selection is ONE drop target (user decision, 2026-11-13).
+  Preserve the user's requirements, including unchanged arrangement on cancel:
+  "If I am in the arrange mode, and I select two and I create a rectangle that
+  is groupable and I take a single window or a single pane that is outside of
+  the rectangle that I selected and I move it on it then ... the big rectangle
+  should act as one window and this means that I should be able to add it as a tab."
+  "if I go much closer to the border, I want the tab bar to appear if it was
+  not already shown, even if it had only one tab displayed. And like this,
+  we can place ourselves in the tab bar"
+  "actually, can you just pop out the tabbar with single tab as soon as we
+  enter the full selected cluster of target panes"
+  "if I don't let go and I just come back and I cancel my movement, nothing
+  should have changed in the internal arrangement of all the pane."
+  Cluster membership includes every view of every tab in every member, not
+  just shown views. A selection source or a source overlapping those views
+  must never activate the cluster. Preview bars share real bar/item/host-tab
+  classes and slots, but NEVER real target data attributes or focusable controls.
 - Dropping a pane onto ITSELF splits its own area (user decision, 2026-11-09):
   a pane drag or its SHOWN tab's label dropped on its own outer quarter splits
   INSIDE the shown tab. Replace only that entry with a layout tab: the shown

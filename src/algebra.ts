@@ -775,9 +775,35 @@ export type Zone =
   | { kind: "inside"; target: string }
   | { kind: "split"; target: string | "root"; side: Side };
 
+/** Temporary grouping ids for previews: never advance the controller's real allocator. */
+export function probeEnv(ws: Workspace, env: Env): Env {
+  let serial = 0;
+  const fresh: Env["fresh"] = (kind, peek, exclude) => {
+    if (peek) return env.fresh(kind, true, exclude);
+    let id: string;
+    do { id = `__probe:${++serial}`; } while (contains(ws.root, id) || id === exclude);
+    return id;
+  };
+  return { ...env, fresh };
+}
+
 /** Move a view, a node, or the selection (grouped first).  Works on a copy and commits only on success. */
 export function move(ws: Workspace, source: MoveSource, zone: Zone, env: Env, dryRun = false): Result {
+  if (dryRun) env = probeEnv(ws, env);
+  else {
+    const checked = move(ws, source, zone, env, true);
+    if (!checked.ok) return checked;
+  }
   const work: Workspace = { ...ws, root: clone(ws.root), selection: [...ws.selection] };
+  const selectionTarget = zone.target === "selection";
+  let targetKey = zone.target;
+  if (selectionTarget) {
+    if ("selection" in source) return fail("into-itself");
+    if (work.selection.length === 0) return fail("unknown");
+    const plan = planGroup(work, work.selection, env);
+    if (!plan.ok) return refusal(plan, env);
+    targetKey = applyGroup(work, plan).id;
+  }
   let x: TabEntry;
   let single = true;
   if ("selection" in source) {
@@ -794,7 +820,6 @@ export function move(ws: Workspace, source: MoveSource, zone: Zone, env: Env, dr
     if (found === null) return fail("unknown");
     x = found;
   }
-  const targetKey = zone.target;
   if (targetKey !== "root" && findNode(work.root, targetKey) === null) return fail("unknown");
   const from = parentOf(work.root, keyOf(x));
   const destKey = targetKey === "root" ? work.root.id : targetKey;
@@ -832,7 +857,7 @@ export function move(ws: Workspace, source: MoveSource, zone: Zone, env: Env, dr
   }
   if (targetKey === "root" ? keyOf(x) === work.root.id : contains(x, targetKey)) return fail("into-itself");
   if (loneTab) return fail("nothing-to-move");
-  if (zone.kind === "inside" && typeof x === "string" && from?.parent.id === zone.target
+  if (zone.kind === "inside" && typeof x === "string" && from?.parent.id === targetKey
     && shownView(from.parent as TabSetNode, env) === x) return fail("into-itself");
   let index = zone.kind === "bar" ? zone.index : null;
   if (index !== null && from !== null && from.parent.id === targetKey && (from.slot as number) < index) index--;
@@ -851,7 +876,17 @@ export function move(ws: Workspace, source: MoveSource, zone: Zone, env: Env, dr
   }
   if (dryRun) return { ok: true };
   let placed: LayoutNode;
-  if (zone.kind === "bar") placed = insertTab(work, x, dest, index, env);
+  if (zone.kind === "bar" && selectionTarget) {
+    const at = parentOf(work.root, dest.id);
+    if (at?.parent.kind === "tabs") {
+      placed = insertTab(work, x, at.parent, (at.slot as number) + (zone.index === 0 ? 0 : 1), env);
+    } else {
+      const [items, shown] = itemsOf(x, env);
+      placed = tabSet(env.fresh("tabs"), zone.index === 0 ? [...items, dest] : [dest, ...items], shown);
+      put(work, dest.id, placed);
+    }
+  }
+  else if (zone.kind === "bar") placed = insertTab(work, x, dest, index, env);
   else if (zone.kind === "inside") placed = insertInner(work, x, dest, env);
   else {
     const [orientation, first] = SPLIT[zone.side];

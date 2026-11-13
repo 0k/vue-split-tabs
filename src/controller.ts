@@ -20,6 +20,8 @@ export type SplitTabsSource = { view: string } | { node: string } | { selection:
  * - `bar`: one more tab of that tab bar (next to the others), before tab `index` (end when null);
  * - `inside`: a tab INSIDE that zone (a new inner bar, like `tabInside`);
  * - `split`: a new part on that side of a pane, a tab set, a layout, or the whole area (`root`).
+ * Any target may be `selection`: group the current selection first. A bar index of 0
+ * inserts immediately before that group in its holder; null inserts immediately after.
  */
 export type SplitTabsZone =
   | { kind: "bar"; target: string; index: number | null }
@@ -41,6 +43,8 @@ export interface SplitTabsPlan {
   /** Panes in the way (refused) or whose edges grouping aligns (snap). */
   intruders: readonly PaneId[];
   moved: readonly PaneId[];
+  /** Visible bar of which the prospective group is a direct tab, else null. Derived on a copy. */
+  holder: string | null;
 }
 export interface SplitTabsOptions {
   /** Host tab ids, in their natural order. */
@@ -440,6 +444,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     return n !== null && A.isPane(n, env) && A.visiblePanes(A.viewRoot(ws), env).some(p => p.id === id) ? id : null;
   }
   function intentTarget(ws: A.Workspace, id: string, env: A.Env, holder: boolean): string | null {
+    if (id === "selection") return ws.selection.length > 0 ? "selection" : null;
     if (id === "root") return holder ? null : "root";
     const pane = projection.value.panes.find(p => p.id === id);
     if (pane?.collapsed === true && holder) return paneOfView(ws, pane.view, env);
@@ -517,6 +522,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     if (target === null) return null;
     if (z.kind === "split") return { kind: "split", target, side: z.side };
     if (z.kind === "inside") return { kind: "inside", target };
+    if (target === "selection") return { kind: "bar", target, index: z.index };
     // A bar index counts visible tabs; the tree also keeps hidden ones.
     const n = findNode(ws.root, target);
     if (z.index === null || n === null || n.kind !== "tabs") return { kind: "bar", target, index: null };
@@ -531,7 +537,7 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
       holder.tabs = holder.tabs.filter(t => t !== id);
     }
     // Park the prospective view in the destination before using the ordinary move validator.
-    const target = dest.target === "root" ? ws.root : findNode(ws.root, dest.target);
+    const target = dest.target === "root" ? ws.root : findNode(ws.root, dest.target === "selection" ? ws.selection[0]! : dest.target);
     if (target === null) return fail("unknown");
     const anchor = A.visiblePanes(target, env)[0];
     if (anchor === undefined) return fail("unknown");
@@ -681,13 +687,21 @@ export function createSplitTabsController(options: SplitTabsOptions): SplitTabsC
     focus: projectedComputed(() => effectivePane(working.value.ws.focus) ?? panes.value[0]?.id ?? ""),
     selection: projectedComputed(() => [...new Set(working.value.ws.selection.map(id => effectivePane(id)).filter((id): id is string => id !== null))]),
     plan: projectedComputed<SplitTabsPlan | null>(() => {
-      const { ws, env } = working.value;
+      const { ws, env: realEnv } = working.value;
+      const env = A.probeEnv(ws, realEnv);
       if (ws.selection.length === 0) return null;
       const plan = A.planGroup(ws, ws.selection, env);
+      let holder: string | null = null;
+      if (plan.ok) {
+        const copy = { ...ws, root: clone(ws.root), selection: [...ws.selection] };
+        const grouped = A.applyGroup(copy, A.planGroup(copy, copy.selection, env));
+        const parent = parentOf(copy.root, grouped.id)?.parent;
+        if (parent?.kind === "tabs" && A.showsBar(parent, env)) holder = parent.id;
+      }
       const panesOf = (nodes: readonly LayoutNode[]) => [...new Set(nodes.flatMap(n => A.visiblePanes(n, env))
         .map(q => effectivePane(q.id)).filter((id): id is string => id !== null))];
       return {
-        ok: plan.ok, kind: plan.kind, panes: panesOf(plan.selected),
+        ok: plan.ok, kind: plan.kind, panes: panesOf(plan.selected), holder,
         intruders: plan.ok ? [] : panesOf(plan.intruders),
         moved: plan.kind === "snap" ? panesOf(plan.moved.map(t => t.node)) : [],
       };

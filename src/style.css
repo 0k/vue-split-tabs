@@ -208,6 +208,14 @@
 .split-tab-strip-tab:hover,
 .split-tab-strip-close:hover { background: var(--split-tabs-button-hover-background, rgba(127, 127, 127, 0.08)); }
 .split-tab-strip-tab { flex: 0 0 auto; white-space: nowrap; touch-action: pan-x; user-select: none; }
+.split-tabs-bar-preview {
+  position: absolute;
+  z-index: var(--split-tabs-overlay-z-index, 4);
+  background: var(--split-tabs-bar-preview-background, Canvas);
+  pointer-events: none;
+  box-sizing: border-box;
+}
+.split-tabs-bar-preview * { pointer-events: none; }
 .split-tab-strip-rename { min-width: 0; width: 10em; max-width: 100%; box-sizing: border-box; cursor: text; }
 .split-tab-strip-title > .split-tab-strip-tab:not(:last-child) { padding-right: 0; }
 .split-tab-strip--vertical {

@@ -55,6 +55,9 @@ layout or inner bar. ~cuts~ and ~tabSets~ are maps by stable ids.
 ~layout~ includes the effective geometry; ~intent~ is the persistence
 representation. ~plan~ previews grouping rather than applying it.
 ~restoredActive~ exposes a usable stored focused view when available.
+~SplitTabsPlan.holder: string | null~ names the visible tab set of which the
+prospective group would be a direct tab, or null. Visibility includes the
+~alwaysShow~ policy. This is derived on a copy, never saved or applied on hover.
 
 ~rename(key: string, title: string): SplitTabsResult~ trims titles; empty
 clears, an unknown key returns ~{ ok: false, reason: 'unknown' }~. A changed
@@ -87,6 +90,13 @@ type Side = 'top' | 'right' | 'bottom' | 'left';
 ~bar.index~ counts visible tab slots; ~null~ appends. ~target~ is a node
 id, with ~"root"~ accepted for splitting the whole area. A selection source
 uses the current selection and groups it first. ~canMove~ is the dry run.
+Any zone can also target ~"selection"~: group the current selection first.
+On a selection bar zone ~index: 0~ inserts immediately before the group,
+~null~ immediately after, in its existing holder or a new bar in its place.
+A dragged pane brings its tabs, not its bar, and is shown after insertion.
+Split/inside act on the grouped node. Empty selection returns ~unknown~;
+ungroupable returns ~not-groupable~; selection-into-selection returns
+~into-itself~. ~move~, ~canMove~ and ~insert~ share these rules atomically.
 
 #+begin_src typescript
 const target = controller.panes.value[0]?.id;
@@ -247,6 +257,16 @@ arms its source pointer and hands it over after its own threshold.
 ~TabDropTarget~ carries the checked bar/inside/split/bin target, result,
 preview shade, and marker state. Only a valid drop calls ~beforeDrop~;
 cancellation, another root, and refused drops do not register external ids.
+Its optional ~reveal: { rect: PreviewRect; side: Side; tab: SplitTabsTabScope }~
+describes the non-mutating one-tab overlay in root coordinates. It appears
+on every zone inside a popped cluster, or on a hidden pane's bar strip.
+Cluster scope is ~{ id: '', active: true, kind: 'layout', views, title: null }~,
+with all member views in plan order; pane scope is its shown tab's key,
+description and custom title. ~.split-tabs-bar-preview~ shares real bar and
+active item/title/tab classes, ~tabClass~ and ~#tab~, but no real-target data
+attributes; it is pointer-inert, aria-hidden and below insertion markers.
+Its ~data-root-edges~ lists the root edges it touches (~top left~, ...), absent when none,
+so hosts can keep corner controls clear of the previewed label.
 
 * Types and separate entries
 

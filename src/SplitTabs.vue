@@ -166,7 +166,7 @@ function run(command: SplitTabsCommand): void {
 defineExpose({ startExternalDrag: drag.startExternal, run, startRename });
 
 // Geometry of overlays, in root coordinates, measured after each render.
-function bump(): void { geometry.value++; }
+function bump(): void { geometry.value++; drag.refresh(); }
 function rectOf(el: Element): PreviewRect {
   const r = el.getBoundingClientRect(), host = root.value!.getBoundingClientRect();
   return { left: r.left - host.left, top: r.top - host.top, width: r.width, height: r.height };
@@ -261,6 +261,35 @@ onBeforeUnmount(() => {
   c.setAlwaysShow(false);
 });
 const zone = computed(() => drag.target.value);
+const preview = ref<HTMLElement | null>(null);
+/** Root edges the previewed bar touches, for hosts that draw controls over the root's corners. */
+const previewEdges = computed(() => {
+  const r = zone.value?.reveal?.rect;
+  if (r === undefined || root.value === null) return undefined;
+  const host = root.value.getBoundingClientRect(), near = (a: number, b: number) => Math.abs(a - b) < 1;
+  const edges = [near(r.top, 0) && "top", near(r.left, 0) && "left", near(r.left + r.width, host.width) && "right",
+    near(r.top + r.height, host.height) && "bottom"].filter(Boolean);
+  return edges.length > 0 ? edges.join(" ") : undefined;
+});
+let previewObserver: ResizeObserver | undefined;
+// WebView 91 predates inert: host slot controls must also leave the tab order there.
+watch([preview, () => zone.value?.reveal?.tab], ([el]) => {
+  if (el === null) return;
+  for (const child of el.querySelectorAll<HTMLElement>(FOCUSABLE)) {
+    child.tabIndex = -1;
+    if (child.isContentEditable) child.contentEditable = "false";
+  }
+}, { flush: "post" });
+watch(preview, el => {
+  previewObserver?.disconnect();
+  if (el !== null && typeof ResizeObserver !== "undefined") {
+    previewObserver = new ResizeObserver(() => drag.refresh());
+    previewObserver.observe(el);
+    const item = el.firstElementChild;
+    if (item !== null) previewObserver.observe(item);
+  }
+}, { flush: "post" });
+onBeforeUnmount(() => previewObserver?.disconnect());
 </script>
 
 <template>
@@ -315,6 +344,19 @@ const zone = computed(() => drag.target.value);
     <div v-if="destinationBox" class="split-tabs-destination" aria-hidden="true" :style="previewStyle(destinationBox)" />
     <div v-if="guide" class="split-tabs-guide" aria-hidden="true" :data-axis="guide.axis"
       :style="guide.axis === 'x' ? { left: `${guide.at - 1}px` } : { top: `${guide.at - 1}px` }" />
+    <div v-if="zone?.reveal" ref="preview" class="split-tab-strip split-tabs-bar split-tabs-bar-preview" aria-hidden="true" inert
+      :class="{ 'split-tab-strip--vertical': zone.reveal.side === 'left' || zone.reveal.side === 'right',
+        'split-tab-strip--drop-target': zone.kind === 'bar' }" :data-side="zone.reveal.side" :data-root-edges="previewEdges"
+      :style="previewStyle(zone.reveal.rect)">
+      <div class="split-tab-strip-item split-tab-strip-item--active" :data-kind="zone.reveal.tab.kind">
+        <span class="split-tab-strip-title split-tab-strip-title--active">
+          <span class="split-tab-strip-tab split-tab-strip-tab--active" :class="tabClass">
+            <slot name="tab" v-bind="zone.reveal.tab">{{ zone.reveal.tab.title
+              ?? (zone.reveal.tab.kind === 'view' ? zone.reveal.tab.id : zone.reveal.tab.views.join('+')) }}</slot>
+          </span>
+        </span>
+      </div>
+    </div>
     <div v-if="zone" class="split-tabs-drop-shade" aria-hidden="true" :data-zone="zone.kind"
       :data-side="zone.kind === 'split' ? zone.side : undefined" :data-refused="zone.result.ok ? undefined : ''"
       :data-marker="zone.marker ? '' : undefined" :style="previewStyle(zone.shade)" />

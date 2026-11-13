@@ -241,6 +241,8 @@ describe("compatibility and packaging", () => {
     expect(rule(".split-tabs-anchor {")).toContain("display: contents");
     expect(rule(".split-tabs-keep-holder {")).toContain("display: none");
     expect(css).not.toContain("split-tab-strip-send");
+    // A previewed bar is drawn over pane content: it must hide what lies under its label.
+    expect(rule(".split-tabs-bar-preview {")).toContain("background: var(--split-tabs-bar-preview-background, Canvas)");
     expect(declarations(css, ".split-tab-strip-close svg")).toContain("--split-tabs-close-size, 10px");
     const variables = [...css.matchAll(/var\((--split-tabs-[a-z-]+)/g)].map((match) => match[1]);
     const docs = readFileSync("README.org", "utf8");

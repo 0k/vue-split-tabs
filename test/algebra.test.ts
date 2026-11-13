@@ -47,6 +47,44 @@ const activate = (ws: A.Workspace, env: TestEnv, id: string, index: number) =>
   A.activate(ws, id, keyOf(tabsAt(ws, id).tabs[index]!), env);
 const bar = (id: string, index: number | null = null) => ({ kind: "bar" as const, target: id, index });
 
+describe("selection drop targets", () => {
+  it.each([0, null])("groups before inserting beside the group (index %s), atomically", index => {
+    const { env, ws } = setup("cols");
+    select(ws, env, "1", "2");
+    const before = JSON.stringify(ws);
+    expect(A.move(ws, { view: "3" }, bar("selection", index), env, true)).toEqual({ ok: true });
+    expect(JSON.stringify(ws)).toBe(before);
+    expect(A.move(ws, { view: "3" }, bar("selection", index), env).ok).toBe(true);
+    expect(root(ws, env)).toBe(index === 0 ? "V[T{*3 | H[1 2]} 4]" : "V[T{H[1 2] | *3} 4]");
+    expect(ws.selection).toEqual([]);
+    expect(focusView(ws, env)).toBe("3");
+  });
+  it("inserts immediately beside a group in its existing holder, not at the end", () => {
+    const env = makeEnv();
+    const group = cut("group", "cols", 0.5, tabSet("a", ["a1"]), tabSet("b", ["b1"]));
+    const ws = workspace(cut("outer", "rows", 0.7, tabSet("holder", ["before", group, "after"], "group"), tabSet("c", ["c1"])), env);
+    ws.selection = ["a", "b"];
+    expect(A.move(ws, { node: "c" }, bar("selection", null), env).ok).toBe(true);
+    expect(root(ws, env)).toBe("T{before | H[a1 b1] | *c1 | after}");
+  });
+  it.each(["inside", "split"] as const)("groups before a %s drop", kind => {
+    const { env, ws } = setup("cols");
+    select(ws, env, "1", "2");
+    const zone: A.Zone = kind === "inside" ? { kind, target: "selection" } : { kind, target: "selection", side: "left" };
+    expect(A.move(ws, { view: "3" }, zone, env).ok).toBe(true);
+    expect(root(ws, env)).toBe(kind === "inside" ? "V[T{H[1 2] | *3} 4]" : "V[H[3 H[1 2]] 4]");
+  });
+  it("refuses empty, ungroupable and selection-into-selection without changing the workspace", () => {
+    const { env, ws } = setup("cols");
+    expect(A.move(ws, { view: "3" }, bar("selection"), env)).toEqual({ ok: false, reason: "unknown" });
+    select(ws, env, "1", "4");
+    const before = JSON.stringify(ws);
+    expect(A.move(ws, { view: "3" }, bar("selection"), env)).toMatchObject({ ok: false, reason: "not-groupable" });
+    expect(JSON.stringify(ws)).toBe(before);
+    expect(A.move(ws, { selection: ws.selection }, bar("selection"), env)).toEqual({ ok: false, reason: "into-itself" });
+  });
+});
+
 describe("grouping", () => {
   it("columns-first 2x2: grouping the top row re-cuts rows first", () => {
     const { env, ws } = setup("cols");

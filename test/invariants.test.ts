@@ -62,7 +62,7 @@ function run(seed: number, steps: number) {
     ["replace", () => { const ph = views().filter(v => c.isPlaceholder(v)); if (ph.length > 0) c.replace(pick(ph), pick(["d", "e", "f"])); }],
     ["move", () => {
       const source = rand() < 0.5 ? { view: pick(views()) } : rand() < 0.5 ? { node: pick(panes()) } : { selection: true as const };
-      const target = rand() < 0.15 ? "root" : pick(panes());
+      const target = rand() < 0.15 ? "root" : rand() < 0.2 ? "selection" : pick(panes());
       const zone = rand() < 0.3 ? { kind: "inside" as const, target: target === "root" ? pick(panes()) : target }
         : rand() < 0.5 ? { kind: "bar" as const, target: target === "root" ? pick(panes()) : target, index: rand() < 0.5 ? null : 0 }
           : { kind: "split" as const, target, side: pick(SIDES) };

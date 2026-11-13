@@ -30,6 +30,89 @@ const pane = (c: Controller, view: string) => c.paneOf(view)!;
 const splitOff = (c: Controller, view: string, beside: string, side: "left" | "right" | "top" | "bottom") =>
   c.move({ view }, { kind: "split", target: pane(c, beside), side });
 
+describe("selection drop targets", () => {
+  // M3: repeated hover/refusal probes must not advance the real ID allocator.
+  it("M3 one hundred cluster hovers produce the same drop ids as a direct drop", () => {
+    const grid = () => {
+      const { c } = make();
+      splitOff(c, "b", "a", "right"); splitOff(c, "c", "a", "bottom"); splitOff(c, "d", "b", "bottom");
+      c.setSelection([pane(c, "a"), pane(c, "b")]);
+      return c;
+    };
+    const hovered = grid(), direct = grid();
+    const zone = { kind: "bar" as const, target: "selection", index: null };
+    expect(hovered.plan.value).toMatchObject({ ok: true, kind: "exact" });
+    for (let i = 0; i < 100; i++) expect(hovered.canMove({ node: pane(hovered, "c") }, zone).ok).toBe(true);
+    expect(hovered.move({ node: hovered.intent.value.tree.id }, zone).ok).toBe(false);
+    expect(hovered.move({ node: pane(hovered, "c") }, zone).ok).toBe(true);
+    expect(direct.move({ node: pane(direct, "c") }, zone).ok).toBe(true);
+    expect(hovered.intent.value).toEqual(direct.intent.value);
+    hovered.dispose(); direct.dispose();
+  });
+  function selected() {
+    const tabs = ref(["a", "b", "c"]);
+    const f = make({ tabs });
+    splitOff(f.c, "c", "a", "bottom");
+    splitOff(f.c, "b", "a", "right");
+    f.c.setSelection([pane(f.c, "a"), pane(f.c, "b")]);
+    f.storage.setItem.mockClear();
+    return { ...f, tabs };
+  }
+  it("derives the direct visible holder on a copy, respecting alwaysShow", () => {
+    const { c, storage } = selected();
+    const before = JSON.stringify(c.intent.value);
+    expect(c.plan.value).toMatchObject({ ok: true, holder: null });
+    expect(JSON.stringify(c.intent.value)).toBe(before);
+    expect(writes(storage)).toBe(0);
+    c.tabNext();
+    const holder = c.focus.value;
+    c.select(holder, c.tabSet(holder)!.tabs[0]!);
+    c.setSelection([pane(c, "a"), pane(c, "b")]);
+    expect(c.plan.value).toMatchObject({ holder });
+  });
+  it.each([0, null])("canMove previews without writes; move groups and writes once (index %s)", index => {
+    const { c, storage } = selected();
+    const before = JSON.stringify([c.intent.value, c.selection.value, c.focus.value]);
+    const zone = { kind: "bar" as const, target: "selection", index };
+    expect(c.canMove({ node: pane(c, "c") }, zone)).toEqual({ ok: true });
+    expect(JSON.stringify([c.intent.value, c.selection.value, c.focus.value])).toBe(before);
+    expect(writes(storage)).toBe(0);
+    expect(c.move({ node: pane(c, "c") }, zone).ok).toBe(true);
+    expect(c.notation.value).toBe(index === 0 ? "T{*c | H[a b]}" : "T{H[a b] | *c}");
+    expect(c.selection.value).toEqual([]);
+    expect(writes(storage)).toBe(1);
+  });
+  it("a holder with one visible tab is reported only when the alwaysShow policy requests it", () => {
+    const storage = memoryStorage();
+    storage.values.set("layouts", JSON.stringify({ entries: [{ key: "page", stamp: 1, intent: {
+      version: 3, focus: "a", opened: [], tree: { kind: "cut", id: "outer", orientation: "rows", ratio: 0.6,
+        first: { kind: "tabs", id: "holder", active: "group", tabs: [
+          { kind: "cut", id: "group", orientation: "cols", ratio: 0.5,
+            first: { kind: "tabs", id: "pa", tabs: ["a"], active: "a" },
+            second: { kind: "tabs", id: "pb", tabs: ["b"], active: "b" } }, "absent" ] },
+        second: { kind: "tabs", id: "pc", tabs: ["c"], active: "c" } },
+    } }] }));
+    const { c } = make({ tabs: ["a", "b", "c"], storage });
+    c.setSelection([pane(c, "a"), pane(c, "b")]);
+    storage.setItem.mockClear();
+    const before = JSON.stringify(c.intent.value);
+    expect(c.plan.value).toMatchObject({ holder: null });
+    c.setAlwaysShow(set => set.id === "holder");
+    expect(c.plan.value).toMatchObject({ holder: "holder" });
+    expect(JSON.stringify(c.intent.value)).toBe(before);
+    expect(writes(storage)).toBe(0);
+    c.dispose();
+  });
+  it("parks an external insertion in a member and detaches it after grouping", () => {
+    const { c, storage, tabs } = selected();
+    expect(c.canMove({ view: "x" }, { kind: "bar", target: "selection", index: 0 }).ok).toBe(true);
+    expect(writes(storage)).toBe(0);
+    expect(c.insert("x", { kind: "bar", target: "selection", index: 0 }, () => { tabs.value.push("x"); }).ok).toBe(true);
+    expect(c.notation.value).toBe("V[T{*x | H[a b]} c]");
+    expect(writes(storage)).toBe(1);
+  });
+});
+
 describe("host tabs and implicit placement", () => {
   it("refused external insert never registers, changes the tree or writes storage", () => {
     const tabs = ref(["a", "b"]);

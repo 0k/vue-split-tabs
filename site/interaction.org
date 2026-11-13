@@ -227,6 +227,8 @@ Internal drags cannot target another SplitTabs root.
 | Zone | Result |
 |------+--------|
 | Tab bar | Add next to its tabs at the insertion marker. |
+| Hidden one-tab pane's would-be bar strip | Preview the shown tab; drop adds next to it. No strip on the source itself. |
+| Groupable multi-pane selection, outside source | One cluster: popped top bar adds beside group, content quarters split group, middle adds inside. |
 | Pane middle | Add inside the shown content, creating an inner bar where needed. |
 | Pane outer quarter | Content goes on the indicated side; an own-pane drop creates a new placeholder opposite. |
 | Thin frame band | Split beside the entire framed tab set. |
@@ -236,6 +238,23 @@ Internal drags cannot target another SplitTabs root.
 The library bar is a sibling outside the pane. Its rectangle is never a
 pane middle or quarter zone, and pane covers/arrange badges never cover its
 controls. Frame/root edge bands still refer to the outer frame/root box.
+
+The cluster rectangle includes member tab-set boxes and frames whose panes
+are all members. It overrides every member zone, including real bars, but
+bin/root and non-member frame bands retain precedence. Sources overlapping
+ANY view in ANY member tab, and selection sources, do not activate it.
+The one-tab bar pops out on entering ANYWHERE in that rectangle, unless the
+prospective group is already a direct tab of a visible holder bar. With a
+popped bar the content excludes its strip; without one quarters/middle use
+the full rectangle and the real holder bar remains a target.
+
+Hidden pane strips use their configured side and bar dimensions; their
+remaining content supplies the quarters/middle, just like a visible bar.
+Both previews share ~.split-tabs-bar-preview~, active item/title/tab classes
+and the host's tab slot/class. They are inert overlays above Keep content,
+below the marker, not real hit-test targets. Hover resizes and saves nothing;
+leaving the zone or ending/cancelling the drag removes them. Grouping is
+applied only on a successful drop, which writes once.
 
 Self-drops of a pane or its SHOWN label split INSIDE the shown tab, even in
 a multi-tab pane. The other tabs stay untouched; the shown entry becomes a

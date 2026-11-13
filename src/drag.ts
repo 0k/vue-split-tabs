@@ -4,8 +4,9 @@
 // whole area), the edge of a framed tab set (split beside it), a tab bar (a
 // tab next to the others), a pane edge quarter (split that pane) and a
 // pane's middle (a tab inside it).
-import { ref, shallowRef, type Ref, type ShallowRef } from "vue";
+import { nextTick, ref, shallowRef, type Ref, type ShallowRef } from "vue";
 import type { Side } from "./model.js";
+import type { SplitTabsTabScope } from "./context.js";
 import type { SplitTabsController, SplitTabsResult, SplitTabsSource, SplitTabsZone } from "./controller.js";
 
 export interface PreviewRect { left: number; top: number; width: number; height: number }
@@ -15,6 +16,8 @@ type Zoned = (SplitTabsZone | { kind: "bin" }) & {
   marker: boolean;
   /** Opposite half created by a self-drop; present even when size refuses the drop. */
   newPane?: PreviewRect;
+  /** Non-mutating one-tab bar overlay, in root coordinates; never a real hit-test target. */
+  reveal?: { rect: PreviewRect; side: Side; tab: SplitTabsTabScope };
 };
 /** A drop target, with what a drop would do as the controller checked it. */
 export type TabDropTarget = Zoned & { result: SplitTabsResult };
@@ -60,6 +63,8 @@ export interface TabDrag {
   /** Continue a library-owned drag while the shell blocks content in capture. */
   capture(event: PointerEvent): void;
   cancelOwner(owner: HTMLElement | null): void;
+  /** Recheck the stationary pointer after rendered geometry changes. */
+  refresh(): void;
   dispose(): void;
 }
 
@@ -96,6 +101,7 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
   let springTimer: ReturnType<typeof setTimeout> | null = null;
   let longFired = false;
   let last: { x: number; y: number } | null = null;
+  let revealKey = "";
 
   function clearSuppression(): void {
     if (suppressTimer !== null) clearTimeout(suppressTimer);
@@ -124,6 +130,61 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
   function hits(x: number, y: number): Element[] {
     return typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [];
   }
+  function carriedViews(): readonly string[] {
+    const s = source.value;
+    if (s === null) return [];
+    if ("selection" in s) return controller.selection.value.flatMap(id => controller.describe(id)?.views ?? []);
+    const key = "view" in s ? s.view : s.node;
+    return controller.describe(key)?.views ?? [key];
+  }
+  function cluster(): { members: readonly string[]; frames: HTMLElement[]; rect: DOMRect; views: string[]; holder: string | null } | null {
+    const plan = controller.plan.value, s = source.value;
+    if (s === null || "selection" in s || controller.selection.value.length < 2 || !plan?.ok || plan.panes.length < 2) return null;
+    const members = plan.panes;
+    const views = members.flatMap(id => controller.tabSet(id)?.tabs.flatMap(key => controller.describe(key)?.views ?? []) ?? []);
+    if (("node" in s && members.includes(s.node)) || carriedViews().some(view => views.includes(view))) return null;
+    const frames = all<HTMLElement>("[data-frame-id]").filter(frame => {
+      const panes = [...frame.querySelectorAll<HTMLElement>("[data-pane-id]")].filter(own);
+      return panes.length > 0 && panes.every(pane => members.includes(pane.dataset.paneId!));
+    });
+    const boxes = [...all<HTMLElement>(".split-tabs-tabset[data-tabset-id]").filter(el => members.includes(el.dataset.tabsetId!)), ...frames]
+      .map(el => el.getBoundingClientRect());
+    if (boxes.length === 0) return null;
+    const left = Math.min(...boxes.map(r => r.left)), top = Math.min(...boxes.map(r => r.top));
+    const rect = new DOMRect(left, top, Math.max(...boxes.map(r => r.right)) - left, Math.max(...boxes.map(r => r.bottom)) - top);
+    return { members, frames, rect, views, holder: plan.holder };
+  }
+  function contentZone(r: DOMRect, x: number, y: number, id: string, shadeRect = r): Zoned | null {
+    if (r.width <= 0 || r.height <= 0) return null;
+    const fx = (x - r.left) / r.width, fy = (y - r.top) / r.height;
+    const d: Record<Side, number> = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
+    const side = (Object.keys(d) as Side[]).reduce((a, b) => (d[b] < d[a] ? b : a));
+    if (d[side] < EDGE_FRACTION) return { kind: "split", target: id, side, shade: half(shadeRect, side), marker: false };
+    return { kind: "inside", target: id, shade: relative(r), marker: false };
+  }
+  function previewBar(r: DOMRect, side: Side, thickness: number, tab: SplitTabsTabScope): { reveal: NonNullable<Zoned["reveal"]>; content: DOMRect } {
+    const vertical = side === "left" || side === "right";
+    const size = Math.min(thickness, vertical ? r.width : r.height);
+    const bar = new DOMRect(side === "right" ? r.right - size : r.left, side === "bottom" ? r.bottom - size : r.top,
+      vertical ? size : r.width, vertical ? r.height : size);
+    const content = new DOMRect(r.left + (side === "left" ? size : 0), r.top + (side === "top" ? size : 0),
+      r.width - (vertical ? size : 0), r.height - (vertical ? 0 : size));
+    return { reveal: { rect: relative(bar), side, tab }, content };
+  }
+  function previewZone(preview: ReturnType<typeof previewBar>, x: number, y: number, id: string): Zoned | null {
+    const { reveal } = preview, r = reveal.rect, box = hostRect();
+    const sr = new DOMRect(r.left + box.left, r.top + box.top, r.width, r.height);
+    if (!inside(sr, x, y)) return null;
+    const vertical = reveal.side === "left" || reveal.side === "right";
+    // Measure exactly the label the host rendered, not an estimate of its text width.
+    const label = all<HTMLElement>(".split-tabs-bar-preview > .split-tab-strip-item")[0]?.getBoundingClientRect();
+    const item = label !== undefined && label.width > 0 && label.height > 0 ? label : sr;
+    const before = (vertical ? y < item.top + item.height / 2 : x < item.left + item.width / 2);
+    const edge = vertical ? (before ? item.top : item.bottom) - box.top : (before ? item.left : item.right) - box.left;
+    const shade = vertical ? { left: r.left, top: edge - 2, width: r.width, height: 4 }
+      : { left: edge - 2, top: r.top, width: 4, height: r.height };
+    return { kind: "bar", target: id, index: before ? 0 : null, shade, marker: true, reveal };
+  }
   function zoneAt(x: number, y: number): Zoned | null {
     if (root.value === null) return null;
     const box = hostRect();
@@ -134,12 +195,21 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     }
     const outer = nearestSide(box, x, y);
     if (outer.dist < ROOT_EDGE_PX) return { kind: "split", target: "root", side: outer.side, shade: half(box, outer.side), marker: false };
+    const group = cluster();
     for (const frame of all<HTMLElement>("[data-frame-id]").reverse()) {
+      if (group?.frames.includes(frame)) continue;
       const r = frame.getBoundingClientRect();
       if (!inside(r, x, y)) continue;
       const near = nearestSide(r, x, y);
       const band = near.side === (frame.dataset.side ?? "top") ? FRAME_BAR_EDGE_PX : FRAME_EDGE_PX;
       if (near.dist < band) return { kind: "split", target: frame.dataset.frameId!, side: near.side, shade: half(r, near.side), marker: false };
+    }
+    if (group !== null && inside(group.rect, x, y)) {
+      if (group.holder !== null) return contentZone(group.rect, x, y, "selection");
+      const preview = previewBar(group.rect, "top", controller.barThickness,
+        { id: "", active: true, kind: "layout", views: group.views, title: null });
+      const zone = previewZone(preview, x, y, "selection") ?? contentZone(preview.content, x, y, "selection", group.rect);
+      return zone === null ? null : { ...zone, reveal: preview.reveal };
     }
     const strip = hits(x, y).map(el => el.closest<HTMLElement>(".split-tab-strip[data-tab-set]")).find(el => el !== null && own(el)) ?? null;
     if (strip !== null) {
@@ -160,13 +230,22 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     const pane = all<HTMLElement>("[data-pane-id]").find(el => inside(el.getBoundingClientRect(), x, y));
     if (pane === undefined) return null;
     const r = pane.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) return null;
-    const fx = (x - r.left) / r.width, fy = (y - r.top) / r.height;
-    const d: Record<Side, number> = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
-    const side = (Object.keys(d) as Side[]).reduce((a, b) => (d[b] < d[a] ? b : a));
     const id = pane.dataset.paneId!;
-    if (d[side] < EDGE_FRACTION) return { kind: "split", target: id, side, shade: half(r, side), marker: false };
-    return { kind: "inside", target: id, shade: relative(r), marker: false };
+    const p = controller.panes.value.find(p => p.id === id), s = source.value;
+    if (p !== undefined && !p.showsBar && s !== null && !("node" in s && s.node === id)
+      && !("selection" in s && controller.plan.value?.panes.includes(id)) && !group?.members.includes(id)
+      && !p.tabs.flatMap(key => controller.describe(key)?.views ?? []).some(view => carriedViews().includes(view))) {
+      const set = all<HTMLElement>(".split-tabs-tabset[data-tabset-id]").find(el => el.dataset.tabsetId === id);
+      const key = p.active, entry = controller.describe(key);
+      if (set !== undefined && entry !== null) {
+        const measured = set.getBoundingClientRect();
+        const preview = previewBar(measured.width > 0 && measured.height > 0 ? measured : r, p.side,
+          p.side === "left" || p.side === "right" ? p.barWidth : controller.barThickness,
+          { id: key, active: true, ...entry, title: controller.titleOf(key) });
+        return previewZone(preview, x, y, id) ?? contentZone(preview.content, x, y, id);
+      }
+    }
+    return contentZone(r, x, y, id);
   }
   function check(zone: Zoned): TabDropTarget {
     let result: SplitTabsResult;
@@ -185,6 +264,11 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
   function locate(x: number, y: number): void {
     const zone = zoneAt(x, y);
     target.value = zone === null ? null : check(zone);
+    const key = JSON.stringify(zone?.reveal ?? null);
+    if (key !== revealKey) {
+      revealKey = key;
+      if (zone?.reveal) void nextTick(() => { if (source.value !== null && last !== null) locate(last.x, last.y); });
+    }
   }
   function cancelSpring(): void {
     if (springTimer !== null) clearTimeout(springTimer);
@@ -193,6 +277,8 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
   }
   // Spring-loaded tabs: resting on the label of a hidden tab opens it, so the drop can go into it.
   function springAt(x: number, y: number): void {
+    const group = cluster();
+    if (group !== null && inside(group.rect, x, y)) { cancelSpring(); return; }
     const item = hits(x, y).map(el => el.closest<HTMLElement>(".split-tab-strip-item")).find(el => el !== null && own(el)) ?? null;
     const strip = item?.closest<HTMLElement>(".split-tab-strip[data-tab-set]") ?? null;
     const key = item?.dataset.splitTabsTab;
@@ -280,6 +366,7 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
     source.value = null;
     armed.value = null;
     target.value = null;
+    revealKey = "";
     last = null;
     active.value = false;
   }
@@ -329,6 +416,7 @@ export function createTabDrag(controller: SplitTabsController, root: Ref<HTMLEle
       else if (event.type === "pointercancel") cancelEvent(event);
     },
     active, source, armed, target, spring,
+    refresh() { if (source.value !== null && last !== null) locate(last.x, last.y); },
     press(event, options) {
       if (press !== null || root.value === null || (event.pointerType === "mouse" && event.button !== 0)) return;
       // Secondary touch pointers never start a press.
